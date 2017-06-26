@@ -135,6 +135,18 @@ public class ReadsPipelineSpark extends GATKSparkTool {
         final Broadcast<RecalibrationReport> reportBroadcast = ctx.broadcast(bqsrReport);
         final JavaRDD<GATKRead> finalReads = ApplyBQSRSparkFn.apply(markedReads, reportBroadcast, getHeaderForReads(), applyBqsrArgs.toApplyBQSRArgumentCollection(bqsrArgs.PRESERVE_QSCORES_LESS_THAN));
 
-        writeReads(ctx, output, finalReads);
+        final SAMFileHeader readsHeader = getHeaderForReads();
+        ReadCoordinateComparator comparator = new ReadCoordinateComparator(readsHeader);
+        JavaRDD<GATKRead> sortedReads;
+        if (shardedOutput) {
+            sortedReads = finalReads
+                    .mapToPair(read -> new Tuple2<>(read, null))
+                    .sortByKey(comparator, true, numReducers)
+                    .keys();
+        } else {
+            sortedReads = finalReads; // sorting is done by writeReads below
+        }
+        readsHeader.setSortOrder(SAMFileHeader.SortOrder.coordinate);
+        writeReads(ctx, output, sortedReads);
     }
 }
