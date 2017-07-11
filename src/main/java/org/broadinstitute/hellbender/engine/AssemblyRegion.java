@@ -545,6 +545,8 @@ public final class AssemblyRegion implements Locatable {
             windowReads.add(read);
         }
 
+        Collections.sort(windowReads, (a, b) -> (a.getStart() < b.getStart() ? -1 : (a.getStart() == b.getStart() ? 0 : 1)));
+
         final LocusIteratorByState locusIterator = new LocusIteratorByState(windowReads.iterator(), DownsamplingMethod.NONE, false, ReadUtils.getSamplesFromHeader(readsHeader), readsHeader, false);
         final ActivityProfile activityProfile = new BandPassActivityProfile(null, maxProbPropagationDistance, activeProbThreshold, BandPassActivityProfile.MAX_FILTER_SIZE, BandPassActivityProfile.DEFAULT_SIGMA, readsHeader);
 
