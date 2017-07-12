@@ -199,6 +199,7 @@ public final class VariantAnnotatorEngine {
         private final List<String> annotationGroupsToUse;
         private final List<String> annotationsToUse;
         private final List<String> annotationsToExclude;
+        static private final Set<Class<?>> knownAnnotationGroups = ClassUtils.knownSubInterfaces(Annotation.class);
 
         private AnnotationManager(final List<String> annotationGroupsToUse, final List<String> annotationsToUse, final List<String> annotationsToExclude){
             this.annotationGroupsToUse = annotationGroupsToUse;
@@ -255,8 +256,10 @@ public final class VariantAnnotatorEngine {
          * Annotation group names are simple names of all interfaces that are subtypes of {@ Annotation}.
          */
         public static List<String> getAllAnnotationGroupNames() {
-            return ClassUtils.knownSubInterfaceSimpleNames(Annotation.class);
+            return allAnnotationGroupNames;
         }
+
+        private static final List<String> allAnnotationGroupNames = ClassUtils.knownSubInterfaceSimpleNames(Annotation.class);
 
         public List<InfoFieldAnnotation> createInfoFieldAnnotations() {
             final List<InfoFieldAnnotation> all = makeAllInfoFieldAnnotations();
@@ -264,8 +267,10 @@ public final class VariantAnnotatorEngine {
         }
 
         private static List<InfoFieldAnnotation> makeAllInfoFieldAnnotations() {
-            return ClassUtils.makeInstancesOfSubclasses(InfoFieldAnnotation.class, Annotation.class.getPackage());
+            return allInfoFieldAnnotations;
         }
+
+        private static final List<InfoFieldAnnotation> allInfoFieldAnnotations = ClassUtils.makeInstancesOfSubclasses(InfoFieldAnnotation.class, Annotation.class.getPackage());
 
         public List<GenotypeAnnotation> createGenotypeAnnotations() {
             final List<GenotypeAnnotation> all = makeAllGenotypeAnnotations();
@@ -273,8 +278,10 @@ public final class VariantAnnotatorEngine {
         }
 
         private static List<GenotypeAnnotation> makeAllGenotypeAnnotations() {
-            return ClassUtils.makeInstancesOfSubclasses(GenotypeAnnotation.class, Annotation.class.getPackage());
+            return allGenotypeAnnotations;
         }
+
+        private static final List<GenotypeAnnotation> allGenotypeAnnotations = ClassUtils.makeInstancesOfSubclasses(GenotypeAnnotation.class, Annotation.class.getPackage());
 
         /**
          * Returns a list of annotations that either:
@@ -287,8 +294,6 @@ public final class VariantAnnotatorEngine {
          */
         private <T extends VariantAnnotation> List<T> filterAnnotations(final List<T> all) {
             final SortedSet<T> annotations = new TreeSet<>(Comparator.comparing(t -> t.getClass().getSimpleName()));
-
-            final Set<Class<?>> knownAnnotationGroups = ClassUtils.knownSubInterfaces(Annotation.class);
 
             for (final T t : all){
                 if (!annotationsToExclude.contains(t.getClass().getSimpleName())) {
