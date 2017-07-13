@@ -196,11 +196,7 @@ public class ReadsPipelineSpark extends GATKSparkTool {
         final ReadFilter haplotypeCallerFilter = (new GATKReadFilterPluginDescriptor(HaplotypeCallerEngine.makeStandardHCReadFilters())).getMergedReadFilter(getHeaderForReads());
         final JavaRDD<GATKRead> filteredReads = calibratedReads.filter(read -> haplotypeCallerFilter.test(read));
 
-        final SAMFileHeader readsHeader = getHeaderForReads();
-        readsHeader.setSortOrder(SAMFileHeader.SortOrder.coordinate);
-        final JavaRDD<GATKRead> sortedReads = SparkUtils.coordinateSortReads(filteredReads, readsHeader, numReducers);
-
-        final JavaRDD<VariantContext> variants = callVariantsWithHaplotypeCaller(getAuthHolder(), ctx, sortedReads, getHeaderForReads(), getReference(), intervals, hcArgs, shardingArgs);
+        final JavaRDD<VariantContext> variants = callVariantsWithHaplotypeCaller(getAuthHolder(), ctx, filteredReads, getHeaderForReads(), getReference(), intervals, hcArgs, shardingArgs);
         if (hcArgs.emitReferenceConfidence == ReferenceConfidenceMode.GVCF) {
             // VariantsSparkSink/Hadoop-BAM VCFOutputFormat do not support writing GVCF, see https://github.com/broadinstitute/gatk/issues/2738
             writeVariants(variants);
