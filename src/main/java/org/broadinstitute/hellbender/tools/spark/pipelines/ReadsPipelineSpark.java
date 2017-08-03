@@ -3,15 +3,21 @@ package org.broadinstitute.hellbender.tools.spark.pipelines;
 import com.google.common.annotations.VisibleForTesting;
 import htsjdk.samtools.SAMFileHeader;
 import htsjdk.samtools.SAMSequenceDictionary;
+import htsjdk.samtools.SAMTextHeaderCodec;
 import htsjdk.samtools.reference.ReferenceSequence;
 import htsjdk.samtools.reference.ReferenceSequenceFile;
 import htsjdk.samtools.util.OverlapDetector;
+import htsjdk.samtools.util.StringLineReader;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.vcf.VCFHeader;
 import org.broadinstitute.barclay.argparser.BetaFeature;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.utils.SerializableFunction;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileStatus;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
 import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
@@ -25,6 +31,7 @@ import org.broadinstitute.hellbender.cmdline.programgroups.SparkPipelineProgramG
 import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.engine.datasources.ReferenceMultiSource;
 import org.broadinstitute.hellbender.engine.filters.ReadFilter;
+import org.broadinstitute.hellbender.engine.filters.WellformedReadFilter;
 import org.broadinstitute.hellbender.engine.spark.AddContextDataToReadSpark;
 import org.broadinstitute.hellbender.engine.spark.GATKSparkTool;
 import org.broadinstitute.hellbender.engine.spark.JoinStrategy;
@@ -37,6 +44,7 @@ import org.broadinstitute.hellbender.tools.ApplyBQSRUniqueArgumentCollection;
 import org.broadinstitute.hellbender.tools.spark.transforms.ApplyBQSRSparkFn;
 import org.broadinstitute.hellbender.tools.spark.transforms.BaseRecalibratorSparkFn;
 import org.broadinstitute.hellbender.tools.spark.transforms.markduplicates.MarkDuplicatesSpark;
+import org.broadinstitute.hellbender.tools.spark.bwa.NativeBwaSparkEngine;
 import org.broadinstitute.hellbender.tools.walkers.bqsr.BaseRecalibrator;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.HaplotypeCaller;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.HaplotypeCallerArgumentCollection;
@@ -56,24 +64,36 @@ import org.broadinstitute.hellbender.utils.spark.SparkUtils;
 import org.broadinstitute.hellbender.utils.variant.GATKVariant;
 import scala.Tuple2;
 
+import java.io.BufferedInputStream;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.Serializable;
+import java.io.FileWriter;
+import java.io.BufferedWriter;
+import java.nio.charset.StandardCharsets;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
+
+import org.broadinstitute.hellbender.engine.spark.datasources.ReadsSparkSink;
+import org.broadinstitute.hellbender.utils.read.ReadsWriteFormat;
+
 @CommandLineProgramProperties(
-        summary = "Takes aligned reads (likely from BWA) and runs MarkDuplicates and BQSR and HaplotypeCaller. The final result is VCF file.",
-        oneLineSummary = "Takes aligned reads (likely from BWA) and runs MarkDuplicates and BQSR HaplotypeCaller. The final result is VCF file.",
-        usageExample = "ReadsPipelineSpark -I single.bam -R referenceURL -knownSites variants.vcf -O file:///tmp/output.vcf",
+        summary = "Takes unaligned fastq reads and runs Burrows-Wheeler Aligner, Mark Duplicates, Base Quality Score Recalibration, and Haplotype Caller. The final result is a VCF file.",
+        oneLineSummary = "Takes unaligned fastq reads and runs BWA, MD, BQSR, and HC. The final result is a VCF file.",
+        usageExample = "ReadsPipelineSpark --inputFastq1 input.fastq.gz [--inputFastq2 input2.fastq.gz] --bwamemIndexImage bwaIndexImage -R referenceURL --knownSites variants.vcf -O file:///tmp/output.vcf",
         programGroup = SparkPipelineProgramGroup.class
 )
 
 /**
- * ReadsPipelineSpark is our standard pipeline that takes aligned reads (likely from BWA) and runs MarkDuplicates
- * and BQSR. The final result is analysis-ready reads.
+ * ReadsPipelineSpark is our standard pipeline that takes unaligned fastq reads
+ * and runs BWA, MarkDuplicates, BQSR, and HaplotypeCaller.
  */
 @DocumentedFeature
 @BetaFeature
@@ -81,17 +101,48 @@ public class ReadsPipelineSpark extends GATKSparkTool {
     private static final long serialVersionUID = 1L;
 
     @Override
-    public boolean requiresReads() { return true; }
-
-    @Override
     public boolean requiresReference() { return true; }
-
 
     @Argument(doc = "the known variants", shortName = "knownSites", fullName = "knownSites", optional = false)
     protected List<String> baseRecalibrationKnownVariants;
 
-    @Argument(doc = "Single file to which variants should be written", fullName= StandardArgumentDefinitions.OUTPUT_LONG_NAME, shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME)
+    @Argument(doc = "input [gzipped] fastq file prefix", fullName = "inputFastq1")
+    protected String inputFastq1 = null;
+
+    @Argument(doc = "another input [gzipped] fastq file prefix", fullName = "inputFastq2", optional = true)
+    protected String inputFastq2 = null;
+
+    @Argument(doc = "dump bwa results in BAM (currently broken)", fullName = "bwaResultBAM", optional = true)
+    protected String bwaResultBAM = null;
+
+    @Argument(doc = "dump bwa results in SAM", fullName = "bwaResultSAM", optional = true)
+    protected String bwaResultSAM = null;
+
+    @Argument(doc = "Complete read group header line. ’\t’ can be used in STR and will be converted to a TAB in the output SAM. The read group ID will be attached to every read in the output. An example is ’@RG\tID:foo\tSM:bar’.", fullName = "readGroupHeaderLine", optional = true)
+    protected String readGroupHeaderLine = null;
+
+    @Override
+    public SAMFileHeader getHeaderForReads() {
+        if(readsHeader == null) {
+            if(readGroupHeaderLine!=null) {
+                readsHeader = new SAMTextHeaderCodec().decode(new StringLineReader(readGroupHeaderLine), null);
+            }
+        }
+        return readsHeader;
+    }
+
+    public void setHeaderForReads(String headerString) {
+        readsHeader = new SAMTextHeaderCodec().decode(new StringLineReader(headerString), null);
+    }
+
+    protected SAMFileHeader readsHeader = null;
+
+    @Argument(doc = "Single file to which variants should be written", fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME, shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME)
     protected String output;
+
+    @Argument(doc = "the bwa mem index image file name that you've distributed to each executor",
+              fullName = "bwamemIndexImage")
+    private String indexImageFile;
 
     @ArgumentCollection
     public final ShardingArgumentCollection shardingArgs = new ShardingArgumentCollection();
@@ -158,13 +209,95 @@ public class ReadsPipelineSpark extends GATKSparkTool {
 
     @Override
     protected void runTool(final JavaSparkContext ctx) {
+        // read fastq inputs
+        List<Tuple2<String, String> > fastqRecordList = new ArrayList<Tuple2<String, String> >();
+        Set<Integer> fileSet = new HashSet<Integer>();
+        try {
+            FileSystem fs = FileSystem.get(new URI(inputFastq1), new Configuration(true));
+            FileStatus[] inputFastq1Files = fs.globStatus(new Path(new URI(inputFastq1+".part*")));
+            if(inputFastq1Files.length==0) {
+                // TODO: try to do the split
+                throw new UserException("Cannot find file: "+inputFastq1+".part*");
+            }
+            for(FileStatus file:inputFastq1Files)
+            {
+                fileSet.add(Integer.parseInt(file.getPath().toString().substring(inputFastq1.length()+5)));
+            }
+        } catch (IOException e) {
+            throw new UserException("Cannot open file: "+e.getMessage());
+        } catch (URISyntaxException e) {
+            throw new UserException("URI syntax error: "+e.getMessage());
+        }
+
+        // stop if there is a gap
+        for(int i = 0;; ++i)
+        {
+            if(fileSet.contains(new Integer(i)))
+            {
+                fastqRecordList.add(
+                    new Tuple2<>(inputFastq1+".part"+i, inputFastq2!=null ? inputFastq2+".part"+i : null)
+                );
+            } else {
+                numReducers = i;
+                break;
+            }
+        }
+
+        JavaRDD<Tuple2<String, String> > fastqRecords = ctx.parallelize(fastqRecordList);
+
+        // bwa
+        final NativeBwaSparkEngine bwaEngine = new NativeBwaSparkEngine(indexImageFile, readGroupHeaderLine);
+        setHeaderForReads(bwaEngine.getHeaderString());
+        bwaEngine.setHeaderObject(getHeaderForReads());
+
+        final WellformedReadFilter wellformedReadFilter = new WellformedReadFilter(getHeaderForReads());
+        final JavaRDD<GATKRead> rawReads = bwaEngine.align(fastqRecords);
+
+        //rawReads.cache();
+
+        final JavaRDD<GATKRead> initialReads = rawReads.filter(read -> wellformedReadFilter.test(read));
+        //initialReads.cache();
+
+        if(bwaResultBAM != null || bwaResultSAM != null)
+        {
+            System.err.println("Get "+rawReads.count()+" reads");
+            System.err.println("Get "+initialReads.count()+" wellformed reads");
+
+            if(bwaResultBAM != null) {
+                String outputFile = bwaResultBAM;
+                try {
+                    ReadsSparkSink.writeReads(ctx, outputFile,
+                            hasReference() ? referenceArguments.getReferenceFile().getAbsolutePath() : null,
+                            rawReads, getHeaderForReads(), shardedOutput ? ReadsWriteFormat.SHARDED : ReadsWriteFormat.SINGLE,
+                            getRecommendedNumReducers());
+                } catch (IOException e) {
+                    throw new UserException.CouldNotCreateOutputFile(outputFile,"writing failed", e);
+                }
+            }
+
+            if(bwaResultSAM != null) {
+                String outputFile = bwaResultSAM;
+                BufferedWriter out = null;
+                try {
+                    out = new BufferedWriter(new FileWriter(bwaResultSAM, false));
+                    for(GATKRead read: rawReads.collect()) {
+                        out.write(read.getSAMString());
+                    }
+                    out.close();
+                } catch (IOException e)
+                {
+                    System.err.println("Error: " + e.getMessage());
+                }
+            }
+        }
+
+        //rawReads.unpersist();
+
         if (joinStrategy == JoinStrategy.BROADCAST && ! getReference().isCompatibleWithSparkBroadcast()){
             throw new UserException.Require2BitReferenceForBroadcast();
         }
 
-        //TOOO: should this use getUnfilteredReads? getReads will apply default and command line filters
-        final JavaRDD<GATKRead> initialReads = getReads();
-
+        // mark duplicates
         final JavaRDD<GATKRead> markedReadsWithOD = MarkDuplicatesSpark.mark(initialReads, getHeaderForReads(), duplicatesScoringStrategy, new OpticalDuplicateFinder(), getRecommendedNumReducers());
         final JavaRDD<GATKRead> markedReads = MarkDuplicatesSpark.cleanupTemporaryAttributes(markedReadsWithOD);
 
@@ -196,6 +329,7 @@ public class ReadsPipelineSpark extends GATKSparkTool {
         final ReadFilter haplotypeCallerFilter = (new GATKReadFilterPluginDescriptor(HaplotypeCallerEngine.makeStandardHCReadFilters())).getMergedReadFilter(getHeaderForReads());
         final JavaRDD<GATKRead> filteredReads = calibratedReads.filter(read -> haplotypeCallerFilter.test(read));
 
+        // hyplotype caller
         final JavaRDD<VariantContext> variants = callVariantsWithHaplotypeCaller(getAuthHolder(), ctx, filteredReads, getHeaderForReads(), getReference(), intervals, hcArgs, shardingArgs);
         if (hcArgs.emitReferenceConfidence == ReferenceConfidenceMode.GVCF) {
             // VariantsSparkSink/Hadoop-BAM VCFOutputFormat do not support writing GVCF, see https://github.com/broadinstitute/gatk/issues/2738
@@ -209,6 +343,14 @@ public class ReadsPipelineSpark extends GATKSparkTool {
                 throw new UserException.CouldNotCreateOutputFile(output, "writing failed", e);
             }
         }
+    }
+
+    @Override
+    public int getRecommendedNumReducers() {
+      if (numReducers != 0) {
+          return numReducers;
+      }
+      return 32;  // TODO: make it work
     }
 
 		/**
