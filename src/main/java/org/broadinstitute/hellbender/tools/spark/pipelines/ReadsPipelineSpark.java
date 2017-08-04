@@ -22,6 +22,7 @@ import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.api.java.function.FlatMapFunction;
+import org.apache.spark.api.java.StorageLevels;
 import org.apache.spark.broadcast.Broadcast;
 import org.broadinstitute.barclay.argparser.*;
 import org.broadinstitute.barclay.help.DocumentedFeature;
@@ -64,14 +65,10 @@ import org.broadinstitute.hellbender.utils.spark.SparkUtils;
 import org.broadinstitute.hellbender.utils.variant.GATKVariant;
 import scala.Tuple2;
 
-import java.io.BufferedInputStream;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.Serializable;
 import java.io.FileWriter;
 import java.io.BufferedWriter;
-import java.nio.charset.StandardCharsets;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.*;
@@ -253,10 +250,10 @@ public class ReadsPipelineSpark extends GATKSparkTool {
         final WellformedReadFilter wellformedReadFilter = new WellformedReadFilter(getHeaderForReads());
         final JavaRDD<GATKRead> rawReads = bwaEngine.align(fastqRecords);
 
-        //rawReads.cache();
+        rawReads.persist(org.apache.spark.api.java.StorageLevels.MEMORY_AND_DISK);
 
         final JavaRDD<GATKRead> initialReads = rawReads.filter(read -> wellformedReadFilter.test(read));
-        //initialReads.cache();
+        initialReads.persist(org.apache.spark.api.java.StorageLevels.MEMORY_AND_DISK);
 
         if(bwaResultBAM != null || bwaResultSAM != null)
         {
@@ -291,7 +288,7 @@ public class ReadsPipelineSpark extends GATKSparkTool {
             }
         }
 
-        //rawReads.unpersist();
+        rawReads.unpersist();
 
         if (joinStrategy == JoinStrategy.BROADCAST && ! getReference().isCompatibleWithSparkBroadcast()){
             throw new UserException.Require2BitReferenceForBroadcast();
