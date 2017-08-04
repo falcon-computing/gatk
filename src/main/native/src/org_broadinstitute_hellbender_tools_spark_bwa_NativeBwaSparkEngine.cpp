@@ -94,14 +94,14 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
 {
     clog<<"libgatkbwa:INFO Start native calculation task\n";
 
-    // java.util.ArrayList
-    jclass java_util_ArrayList;
-    jmethodID java_util_ArrayList_;
-    jmethodID java_util_ArrayList_add;
+    // java.util.LinkedList
+    jclass java_util_LinkedList;
+    jmethodID java_util_LinkedList_;
+    jmethodID java_util_LinkedList_add;
 
-    java_util_ArrayList      = env->FindClass("java/util/ArrayList");
-    java_util_ArrayList_     = env->GetMethodID(java_util_ArrayList, "<init>", "()V");
-    java_util_ArrayList_add  = env->GetMethodID(java_util_ArrayList, "add", "(Ljava/lang/Object;)Z");
+    java_util_LinkedList      = env->FindClass("java/util/LinkedList");
+    java_util_LinkedList_     = env->GetMethodID(java_util_LinkedList, "<init>", "()V");
+    java_util_LinkedList_add  = env->GetMethodID(java_util_LinkedList, "add", "(Ljava/lang/Object;)Z");
 
     // htsjdk.samtools.BAMRecord
     jclass htsjdk_samtools_BAMRecord;
@@ -261,7 +261,7 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
         }
     }
 
-    jobject bam_record_list = env->NewObject(java_util_ArrayList, java_util_ArrayList_);
+    jobject bam_record_list = env->NewObject(java_util_LinkedList, java_util_LinkedList_);
 
     bool all_right = true;
     for(;;)
@@ -428,13 +428,13 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
                 }
                 if(env->IsSameObject(bam_record_list, nullptr))
                 {
-                    clog<<"libgatkbwa:ERROR Object bam_record_list (type:ArrayList<BAMRecord>) is null\n";
+                    clog<<"libgatkbwa:ERROR Object bam_record_list (type:LinkedList<BAMRecord>) is null\n";
                     all_right = false;
                 }
-                env->CallBooleanMethod(bam_record_list, java_util_ArrayList_add, bam_record);
+                env->CallBooleanMethod(bam_record_list, java_util_LinkedList_add, bam_record);
                 if(env->ExceptionCheck())
                 {
-                    clog<<"libgatkbwa:ERROR Failed to add bam_record (type:BAMRecord) to bam_record_list (type:ArrayList<BAMRecord>)\n";
+                    clog<<"libgatkbwa:ERROR Failed to add bam_record (type:BAMRecord) to bam_record_list (type:LinkedList<BAMRecord>)\n";
                     env->ExceptionDescribe();
                     all_right = false;
                 }
