@@ -34,8 +34,6 @@ using namespace std;
 
 ktp_aux_t* aux = nullptr;
 mutex aux_mutex;
-vector<vector<jobject> > global_references;
-mutex global_references_mutex;
 hdfsFS hdfs_fs1 = nullptr;
 mutex hdfs_fs1_mutex;
 hdfsFS hdfs_fs2 = nullptr;
@@ -95,7 +93,6 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
     (JNIEnv * env, jobject obj, jstring fastq_file1, jstring fastq_file2)
 {
     clog<<"libgatkbwa:INFO Start native calculation task\n";
-    vector<jobject> global_references_in_this_thread;
 
     // java.util.ArrayList
     jclass java_util_ArrayList;
@@ -264,9 +261,7 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
         }
     }
 
-    jobject bam_record_list_ = env->NewObject(java_util_ArrayList, java_util_ArrayList_);
-    jobject bam_record_list = env->NewGlobalRef(bam_record_list_);
-    global_references_in_this_thread.push_back(bam_record_list);
+    jobject bam_record_list = env->NewObject(java_util_ArrayList, java_util_ArrayList_);
 
     bool all_right = true;
     for(;;)
@@ -402,12 +397,10 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
             for(int j = 0; j < seqs[i].bams->l && all_right; ++j)
             {
                 const bam1_core_t& bam = seqs[i].bams->bams[j]->core;
-                jbyteArray rest_of_bam_ = env->NewByteArray(seqs[i].bams->bams[j]->l_data-bam.l_extranul);
-                jobject rest_of_bam = env->NewGlobalRef(rest_of_bam_);
-                global_references_in_this_thread.push_back(rest_of_bam);
+                jbyteArray rest_of_bam = env->NewByteArray(seqs[i].bams->bams[j]->l_data-bam.l_extranul);
                 env->SetByteArrayRegion((jbyteArray)rest_of_bam, 0, bam.l_qname-bam.l_extranul, (jbyte*)(seqs[i].bams->bams[j]->data));
                 env->SetByteArrayRegion((jbyteArray)rest_of_bam, bam.l_qname-bam.l_extranul, seqs[i].bams->bams[j]->l_data-bam.l_qname, (jbyte*)(seqs[i].bams->bams[j]->data+bam.l_qname));
-                jobject bam_record_ = env->NewObject(htsjdk_samtools_BAMRecord, htsjdk_samtools_BAMRecord_,
+                jobject bam_record = env->NewObject(htsjdk_samtools_BAMRecord, htsjdk_samtools_BAMRecord_,
                     org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_headerObject,
                     jint(bam.tid),
                     jint(bam.pos+1),
@@ -428,8 +421,6 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
                     env->ExceptionDescribe();
                     all_right = false;
                 }
-                jobject bam_record = env->NewGlobalRef(bam_record_);
-                global_references_in_this_thread.push_back(bam_record);
                 if(env->IsSameObject(bam_record, nullptr))
                 {
                     clog<<"libgatkbwa:ERROR Object bam_record (type:BAMRecord) is null\n";
@@ -478,10 +469,6 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
     
     kseq_destroy(fastq_kseq1);
     kseq_destroy(fastq_kseq2);
-
-    global_references_mutex.lock();
-    global_references.push_back(global_references_in_this_thread);
-    global_references_mutex.unlock();
 
     if(all_right)
     {
@@ -598,9 +585,7 @@ JNIEXPORT void JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Native
     read(out_pipe[0], header_string, header_string_max_len);
     close(out_pipe[0]);
     dup2(saved_stdout_fd, STDOUT_FILENO);
-    jstring header_jstring_ = env->NewStringUTF(header_string);
-    jobject header_jstring = env->NewGlobalRef(header_jstring_);
-    global_references.push_back(vector<jobject>(1, header_jstring));
+    jstring header_jstring = env->NewStringUTF(header_string);
     env->SetObjectField(obj, org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_headerString_, header_jstring);
     delete[] header_string;
     env->ReleaseStringUTFChars(
@@ -648,15 +633,6 @@ JNIEXPORT void JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Native
 
     delete aux;
     aux = nullptr;
-    for(const auto& global_references_vector: global_references)
-    {
-        for(jobject global_reference: global_references_vector)
-        {
-            env->DeleteGlobalRef(global_reference);
-        }
-    }
-    global_references.clear();
-    global_references.shrink_to_fit();
 
     clog<<"libgatkbwa:INFO Native resources released\n";
     aux_mutex.unlock();
