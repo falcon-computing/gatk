@@ -241,7 +241,7 @@ public class ReadsPipelineSpark extends GATKSparkTool {
             }
         }
 
-        JavaRDD<Tuple2<String, String> > fastqRecords = ctx.parallelize(fastqRecordList);
+        JavaRDD<Tuple2<String, String> > fastqRecords = ctx.parallelize(fastqRecordList, fastqRecordList.size());
 
         // bwa
         final NativeBwaSparkEngine bwaEngine = new NativeBwaSparkEngine(indexImageFile, readGroupHeaderLine);
