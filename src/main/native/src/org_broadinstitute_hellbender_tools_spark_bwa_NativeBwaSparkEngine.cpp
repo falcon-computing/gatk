@@ -199,6 +199,7 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
             clog<<"libgatkbwa:ERROR Cannot open fastq 1: "<<fastq_file1_string<<endl;
         }
     }
+    clog<<"libgatkbwa:INFO Read fastq 1 from "<<fastq_file1_string<<endl;
     fastq_kseq1 = kseq_init(fastq_gzfile1);
     if(nullptr == fastq_gzfile1)
     {
@@ -254,6 +255,7 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
                 clog<<"libgatkbwa:ERROR Cannot open fastq 2: "<<fastq_file2_string<<endl;
             }
         }
+        clog<<"libgatkbwa:INFO Read fastq 2 from "<<fastq_file2_string<<endl;
         fastq_kseq2 = kseq_init(fastq_gzfile2);
         if(nullptr == fastq_gzfile2)
         {
@@ -393,7 +395,6 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
         
         for(int i = 0; i < read_count; ++i)
         {
-            
             for(int j = 0; j < seqs[i].bams->l && all_right; ++j)
             {
                 const bam1_core_t& bam = seqs[i].bams->bams[j]->core;
@@ -438,6 +439,8 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
                     env->ExceptionDescribe();
                     all_right = false;
                 }
+                env->DeleteLocalRef(rest_of_bam);
+                env->DeleteLocalRef(bam_record);
             }
             bams_destroy(seqs[i].bams);
         }
