@@ -50,6 +50,21 @@ int main(int argc, char* argv[])
     const string kInputFastq2 = options["paired-input-fastq"].as<string>();
     const string kOutputFastq2 = options["paired-output-fastq"].as<string>();
 
+    // set CLASSPATH
+    if(getenv("CLASSPATH")==nullptr)
+    {
+        FILE* fp = popen("hadoop classpath --glob", "r");
+        if(fp==nullptr)
+        {
+            clog<<"Error: Cannot set CLASSPATH with `hadoop classpath --glob`\n";
+            exit(1);
+        }
+        char buffer[1<<16];
+        fgets(buffer, 1<<16, fp);
+        setenv("CLASSPATH", buffer, 0);
+        pclose(fp);
+    }
+
     SplitFASTQ(kVerboseFlag, kBatchSize, kInputFastq1, kOutputFastq1, kInputFastq2, kOutputFastq2);
 
     return 0;
