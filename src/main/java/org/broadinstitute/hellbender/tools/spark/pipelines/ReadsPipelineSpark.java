@@ -218,7 +218,8 @@ public class ReadsPipelineSpark extends GATKSparkTool {
             }
             for(FileStatus file:inputFastq1Files)
             {
-                fileSet.add(Integer.parseInt(file.getPath().toString().substring(inputFastq1.length()+5)));
+                String pathString = file.getPath().toString();
+                fileSet.add(Integer.parseInt(pathString.substring(pathString.lastIndexOf(".part")+5)));
             }
         } catch (IOException e) {
             throw new UserException("Cannot open file: "+e.getMessage());
