@@ -100,7 +100,7 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
     jmethodID java_util_ArrayList_add;
 
     java_util_ArrayList      = env->FindClass("java/util/ArrayList");
-    java_util_ArrayList_     = env->GetMethodID(java_util_ArrayList, "<init>", "()V");
+    java_util_ArrayList_     = env->GetMethodID(java_util_ArrayList, "<init>", "(I)V");
     java_util_ArrayList_add  = env->GetMethodID(java_util_ArrayList, "add", "(Ljava/lang/Object;)Z");
 
     // htsjdk.samtools.BAMRecord
@@ -263,7 +263,7 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
         }
     }
 
-    jobject bam_record_list = env->NewObject(java_util_ArrayList, java_util_ArrayList_);
+    jobject bam_record_list = env->NewObject(java_util_ArrayList, java_util_ArrayList_, 1<<16); // TODO: better guess on init capacity
 
     bool all_right = true;
     for(;;)
