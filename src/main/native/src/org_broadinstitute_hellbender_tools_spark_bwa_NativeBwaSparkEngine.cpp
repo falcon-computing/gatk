@@ -38,6 +38,10 @@ hdfsFS hdfs_fs1 = nullptr;
 mutex hdfs_fs1_mutex;
 hdfsFS hdfs_fs2 = nullptr;
 mutex hdfs_fs2_mutex;
+size_t total_output_count = 0;
+mutex total_output_count_mutex;
+size_t total_input_count = 0;
+mutex total_input_count_mutex;
 
 int hdfs_buffer_size = 0;
 short hdfs_replication = 0;
@@ -158,6 +162,8 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
     const bool kInput1IsHDFS = fastq_file1_string.substr(0, kHDFSProto.size()) == kHDFSProto;
     const bool kInput2IsHDFS = fastq_file2_string.substr(0, kHDFSProto.size()) == kHDFSProto;
 
+    size_t local_output_count = 0;
+
     if(kInput1IsHDFS)
     {
         // connect if not already connected
@@ -274,6 +280,9 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
             break;
         }
         clog<<"libgatkbwa:INFO Get "<<read_count<<" sequences\n";
+        total_input_count_mutex.lock();
+        total_input_count += read_count;
+        total_input_count_mutex.unlock();
 
         /* Most likely comments in fastq files is not compatible with SAM file,
          * so do not copy comments from fastq. */
@@ -433,6 +442,7 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
                     all_right = false;
                 }
                 env->CallBooleanMethod(bam_record_list, java_util_ArrayList_add, bam_record);
+                local_output_count++;
                 if(env->ExceptionCheck())
                 {
                     clog<<"libgatkbwa:ERROR Failed to add bam_record (type:BAMRecord) to bam_record_list (type:ArrayList<BAMRecord>)\n";
@@ -447,6 +457,11 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
 
         free(seqs);
     }
+
+    total_output_count_mutex.lock();
+    total_output_count += local_output_count;
+    clog<<"libgatkbwa:INFO Total records processed: "<<total_output_count<<"\n";
+    total_output_count_mutex.unlock();
 
     if(hdfs_read_thread1!=nullptr)
     {
@@ -599,6 +614,12 @@ JNIEXPORT void JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Native
         read_group_header_line);
     clog<<"libgatkbwa:INFO Native resources initialized\n";
     aux_mutex.unlock();
+    total_input_count_mutex.lock();
+    total_input_count = 0;
+    total_input_count_mutex.unlock();
+    total_output_count_mutex.lock();
+    total_output_count = 0;
+    total_output_count_mutex.unlock();
 }
 
 /*
