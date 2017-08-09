@@ -86,6 +86,8 @@ static void ReadHDFS(hdfsFS hdfs_fs, hdfsFile hdfs_file, int write_fd)
     delete[] buffer;
 }
 
+void AlignSeqs(bseq1_t* seqs, int read_count, uint64_t start_idx, const bool kIsPaired);
+
 extern "C" {
 
 /*
@@ -284,124 +286,10 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
         total_input_count += read_count;
         total_input_count_mutex.unlock();
 
-        /* Most likely comments in fastq files is not compatible with SAM file,
-         * so do not copy comments from fastq. */
-        if(!aux->copy_comment)
-        {
-            for(int i = 0; i < read_count; i++)
-            {
-                free(seqs[i].comment);
-                seqs[i].comment = 0;
-            }
-        }
-
-        mem_alnreg_v* alnreg = new mem_alnreg_v[read_count];
-
-        for (int i = 0; i < read_count; i++)
-        {
-            mem_chain_v chains = seq2chain(aux, &seqs[i]);
-            kv_init(alnreg[i]);
-            for (int j = 0; j < int(chains.n); j++)
-            {
-                mem_chain2aln(
-                    aux->opt, 
-                    aux->idx->bns, 
-                    aux->idx->pac,
-                    seqs[i].l_seq,
-                    (uint8_t*)seqs[i].seq,
-                    &chains.a[j],
-                    &alnreg[i]);
-                free(chains.a[j].seeds);
-            }
-            free(chains.a);
-
-            // Post-process each chain before output
-            alnreg[i].n = mem_sort_dedup_patch(
-                aux->opt,
-                aux->idx->bns,
-                aux->idx->pac,
-                (uint8_t*)seqs[i].seq,
-                alnreg[i].n,
-                alnreg[i].a);
-
-            for (int j = 0; j < int(alnreg[i].n); j++)
-            {
-                mem_alnreg_t *p = &alnreg[i].a[j];
-                if (p->rid >= 0 && aux->idx->bns->anns[p->rid].is_alt)
-                    p->is_alt = 1;
-            }
-        }
-
-        if(kIsPaired)
-        {
-            mem_pestat_t pes[4];
-            mem_pestat(aux->opt, aux->idx->bns->l_pac, read_count, alnreg, pes);
-
-#ifdef USE_HTSLIB
-            for (int i =0; i< read_count/2; i++) {
-                seqs[i<<1].bams = bams_init();
-                seqs[1+(i<<1)].bams = bams_init();
-                mem_sam_pe(
-                    aux->opt,
-                    aux->idx->bns,
-                    aux->idx->pac,
-                    pes,
-                    (start_idx>>1)+i,
-                    &seqs[i<<1],
-                    &alnreg[i<<1],
-                    aux->h);
-            }
-#else//ifndef USE_HTSLIB
-            for (int i = 0; i < read_count/2; i++) {
-                mem_sam_pe(
-                    aux->opt,
-                    aux->idx->bns,
-                    aux->idx->pac,
-                    pes,
-                    (start_idx>>1)+i,
-                    &seqs[i<<1],
-                    &alnreg[i<<1]);
-            }
-#endif//ifndef USE_HTSLIB
-        }
-        else
-        {
-            for (int i=0; i<read_count; i++)
-            {
-#ifdef USE_HTSLIB
-                seqs[i].bams = bams_init();
-#endif//ifndef USE_HTSLIB
-                mem_mark_primary_se(
-                    aux->opt,
-                    alnreg[i].n,
-                    alnreg[i].a,
-                    start_idx+i
-                    );
-                mem_reg2sam(
-                    aux->opt,
-                    aux->idx->bns,
-                    aux->idx->pac,
-                    &seqs[i],
-                    &alnreg[i],
-                    0,
-                    0,
-                    aux->h
-                    );
-            }
-        }
+        AlignSeqs(seqs, read_count, start_idx, kIsPaired);
 
         start_idx += read_count;
 
-        freeAligns(alnreg, read_count);
-        
-        // Free fields in seq except sam
-        for (int i = 0; i < read_count; i++) {
-            free(seqs[i].name);
-            free(seqs[i].comment);
-            free(seqs[i].seq);
-            free(seqs[i].qual);
-        }
-        
         for(int i = 0; i < read_count; ++i)
         {
             for(int j = 0; j < seqs[i].bams->l && all_right; ++j)
@@ -692,3 +580,128 @@ void freeAligns(mem_alnreg_v* alnreg, int batch_num)
     delete[] alnreg;
 }
 
+/* input: seqs that are read from bseq_read()
+ * input: read_count that are returned from bseq_read()
+ * input: start_idx
+ * input: kIsPaired
+ * output: seqs that are aligned
+ */
+void AlignSeqs(bseq1_t* seqs, int read_count, uint64_t start_idx, const bool kIsPaired)
+{
+    /* Most likely comments in fastq files is not compatible with SAM file,
+     * so do not copy comments from fastq.
+     */
+    if(!aux->copy_comment)
+    {
+        for(int i = 0; i < read_count; i++)
+        {
+            free(seqs[i].comment);
+            seqs[i].comment = 0;
+        }
+    }
+
+    mem_alnreg_v* alnreg = new mem_alnreg_v[read_count];
+
+    for (int i = 0; i < read_count; i++)
+    {
+        mem_chain_v chains = seq2chain(aux, &seqs[i]);
+        kv_init(alnreg[i]);
+        for (int j = 0; j < int(chains.n); j++)
+        {
+            mem_chain2aln(
+                aux->opt,
+                aux->idx->bns,
+                aux->idx->pac,
+                seqs[i].l_seq,
+                (uint8_t*)seqs[i].seq,
+                &chains.a[j],
+                &alnreg[i]);
+            free(chains.a[j].seeds);
+        }
+        free(chains.a);
+
+        // Post-process each chain before output
+        alnreg[i].n = mem_sort_dedup_patch(
+            aux->opt,
+            aux->idx->bns,
+            aux->idx->pac,
+            (uint8_t*)seqs[i].seq,
+            alnreg[i].n,
+            alnreg[i].a);
+
+        for (int j = 0; j < int(alnreg[i].n); j++)
+        {
+            mem_alnreg_t *p = &alnreg[i].a[j];
+            if (p->rid >= 0 && aux->idx->bns->anns[p->rid].is_alt)
+                p->is_alt = 1;
+        }
+    }
+
+    if(kIsPaired)
+    {
+        mem_pestat_t pes[4];
+        mem_pestat(aux->opt, aux->idx->bns->l_pac, read_count, alnreg, pes);
+
+#ifdef USE_HTSLIB
+        for (int i =0; i< read_count/2; i++) {
+            seqs[i<<1].bams = bams_init();
+            seqs[1+(i<<1)].bams = bams_init();
+            mem_sam_pe(
+                aux->opt,
+                aux->idx->bns,
+                aux->idx->pac,
+                pes,
+                (start_idx>>1)+i,
+                &seqs[i<<1],
+                &alnreg[i<<1],
+                aux->h);
+        }
+#else//ifndef USE_HTSLIB
+        for (int i = 0; i < read_count/2; i++) {
+            mem_sam_pe(
+                aux->opt,
+                aux->idx->bns,
+                aux->idx->pac,
+                pes,
+                (start_idx>>1)+i,
+                &seqs[i<<1],
+                &alnreg[i<<1]);
+        }
+#endif//ifndef USE_HTSLIB
+    }
+    else
+    {
+        for (int i=0; i<read_count; i++)
+        {
+#ifdef USE_HTSLIB
+            seqs[i].bams = bams_init();
+#endif//ifndef USE_HTSLIB
+            mem_mark_primary_se(
+                aux->opt,
+                alnreg[i].n,
+                alnreg[i].a,
+                start_idx+i
+                );
+            mem_reg2sam(
+                aux->opt,
+                aux->idx->bns,
+                aux->idx->pac,
+                &seqs[i],
+                &alnreg[i],
+                0,
+                0,
+                aux->h
+                );
+        }
+    }
+
+    freeAligns(alnreg, read_count);
+
+    // Free fields in seq except sam
+    for (int i = 0; i < read_count; i++) {
+        free(seqs[i].name);
+        free(seqs[i].comment);
+        free(seqs[i].seq);
+        free(seqs[i].qual);
+    }
+}
