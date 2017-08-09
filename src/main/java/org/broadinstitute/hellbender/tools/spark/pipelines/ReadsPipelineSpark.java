@@ -289,8 +289,6 @@ public class ReadsPipelineSpark extends GATKSparkTool {
             }
         }
 
-        rawReads.unpersist();
-
         if (joinStrategy == JoinStrategy.BROADCAST && ! getReference().isCompatibleWithSparkBroadcast()){
             throw new UserException.Require2BitReferenceForBroadcast();
         }
