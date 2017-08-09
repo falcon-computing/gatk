@@ -239,7 +239,7 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
             hdfs_fs2_mutex.unlock();
 
             // start read thread
-            hdfsFile hdfs_file = hdfsOpenFile(hdfs_fs2, fastq_file1_string.c_str(), O_RDONLY, hdfs_buffer_size, hdfs_replication, hdfs_block_size);
+            hdfsFile hdfs_file = hdfsOpenFile(hdfs_fs2, fastq_file2_string.c_str(), O_RDONLY, hdfs_buffer_size, hdfs_replication, hdfs_block_size);
             if(hdfs_file==nullptr)
             {
                 clog<<"libgatkbwa:ERROR Cannot open file \""<<fastq_file2_string<<"\" on HDFS"<<endl;
@@ -250,7 +250,7 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
             fastq_gzfile2 = gzdopen(pipe_fd[0], "r");
             if(fastq_gzfile2==nullptr)
             {
-                clog<<"libgatkbwa:ERROR Cannot open fastq 1 from pipe\n";
+                clog<<"libgatkbwa:ERROR Cannot open fastq 2 from pipe\n";
             }
         }
         else
