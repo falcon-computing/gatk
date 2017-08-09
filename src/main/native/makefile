@@ -55,7 +55,7 @@ obj/$(BWA_JNI_ENTRY).o: src/$(BWA_JNI_ENTRY).cpp src/$(BWA_JNI_ENTRY).h $(BWA_FL
 obj/preprocess.o: $(BWA_FLOW_PATH)/src/preprocess.cpp
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) $(BWA_FLAGS) $(HTSLIB_FLAGS) -MM -MP -MT $@ -MF $(@:.o=.d) $<
-	$(CXX) -c $(CXXFLAGS) $(BWA_FLAGS) $(HTSLIB_FLAGS) $^ -o $@
+	$(CXX) -c $(CXXFLAGS) $(BWA_FLAGS) $(HTSLIB_FLAGS) $< -o $@
 
 -include obj/preprocess.d
 
