@@ -90,9 +90,9 @@ extern "C" {
  * Signature: (Ljava/lang/String;Ljava/lang/String;)Ljava/util/List;
  */
 JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_doNativeAlign
-    (JNIEnv * env, jobject obj, jstring fastq_file1, jstring fastq_file2)
+    (JNIEnv * env, jobject obj, jstring fastq_file1, jstring fastq_file2, jlong start_idx)
 {
-    clog<<"libgatkbwa:INFO Start native calculation task\n";
+    clog<<"libgatkbwa:INFO Start native calculation task @ "<<start_idx<<"\n";
 
     // java.util.ArrayList
     jclass java_util_ArrayList;
@@ -286,8 +286,6 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
             }
         }
 
-        uint64_t start_idx = 0; // Can be used for merging; not used now.
-
         mem_alnreg_v* alnreg = new mem_alnreg_v[read_count];
 
         for (int i = 0; i < read_count; i++)
@@ -382,6 +380,8 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
                     );
             }
         }
+
+        start_idx += read_count;
 
         freeAligns(alnreg, read_count);
         

@@ -64,6 +64,7 @@ import org.broadinstitute.hellbender.utils.reference.ReferenceBases;
 import org.broadinstitute.hellbender.utils.spark.SparkUtils;
 import org.broadinstitute.hellbender.utils.variant.GATKVariant;
 import scala.Tuple2;
+import scala.Tuple3;
 
 import java.io.IOException;
 import java.io.Serializable;
@@ -108,6 +109,14 @@ public class ReadsPipelineSpark extends GATKSparkTool {
 
     @Argument(doc = "another input [gzipped] fastq file prefix", fullName = "inputFastq2", optional = true)
     protected String inputFastq2 = null;
+
+    /* This argument helps to calculate the start_idx parameter. If not set,
+     * start_idx will always be zero. At this time, there is no check on
+     * whether this argument is consistent with the split size. Wrong value
+     * will result in wrong start_idx number.
+     */
+    @Argument(doc = "number of read [pairs] in each fastq split", fullName = "fastqSplitSize", optional = true)
+    protected long fastqSplitSize = 0L;
 
     @Argument(doc = "dump bwa results in BAM (currently broken)", fullName = "bwaResultBAM", optional = true)
     protected String bwaResultBAM = null;
@@ -207,7 +216,7 @@ public class ReadsPipelineSpark extends GATKSparkTool {
     @Override
     protected void runTool(final JavaSparkContext ctx) {
         // read fastq inputs
-        List<Tuple2<String, String> > fastqRecordList = new ArrayList<Tuple2<String, String> >();
+        List<Tuple3<String, String, Long> > fastqRecordList = new ArrayList<Tuple3<String, String, Long> >();
         Set<Integer> fileSet = new HashSet<Integer>();
         try {
             FileSystem fs = FileSystem.get(new URI(inputFastq1), new Configuration(true));
@@ -233,7 +242,7 @@ public class ReadsPipelineSpark extends GATKSparkTool {
             if(fileSet.contains(new Integer(i)))
             {
                 fastqRecordList.add(
-                    new Tuple2<>(inputFastq1+".part"+i, inputFastq2!=null ? inputFastq2+".part"+i : null)
+                    new Tuple3<String, String, Long>(inputFastq1+".part"+i, inputFastq2!=null ? inputFastq2+".part"+i : null, new Long((long)i*fastqSplitSize))
                 );
             } else {
                 numReducers = i;
@@ -241,7 +250,7 @@ public class ReadsPipelineSpark extends GATKSparkTool {
             }
         }
 
-        JavaRDD<Tuple2<String, String> > fastqRecords = ctx.parallelize(fastqRecordList, fastqRecordList.size());
+        JavaRDD<Tuple3<String, String, Long> > fastqRecords = ctx.parallelize(fastqRecordList, fastqRecordList.size());
 
         // bwa
         final NativeBwaSparkEngine bwaEngine = new NativeBwaSparkEngine(indexImageFile, readGroupHeaderLine);
