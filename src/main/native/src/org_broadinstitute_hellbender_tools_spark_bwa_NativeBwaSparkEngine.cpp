@@ -46,7 +46,10 @@ mutex total_input_count_mutex;
 int hdfs_buffer_size = 0;
 short hdfs_replication = 0;
 size_t hdfs_block_size = 0;
-int bwa_chunk_size = 10000000;
+
+// for preprocess compatibility
+gzFile fp_idx, fp2_read2;
+void* ko_read1, *ko_read2;
 
 static void ReadHDFS(hdfsFS hdfs_fs, hdfsFile hdfs_file, int write_fd)
 {
@@ -276,7 +279,7 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
     bool all_right = true;
     for(;;)
     {
-        bseq1_t* seqs = bseq_read(bwa_chunk_size, &read_count, fastq_kseq1, fastq_kseq2);
+        bseq1_t* seqs = bseq_read(aux->actual_chunk_size, &read_count, fastq_kseq1, fastq_kseq2);
         if(seqs==nullptr)
         {
             break;
