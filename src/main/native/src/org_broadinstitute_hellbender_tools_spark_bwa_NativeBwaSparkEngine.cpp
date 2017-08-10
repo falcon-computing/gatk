@@ -465,7 +465,7 @@ JNIEXPORT void JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Native
 
     vector<const char*> bwa_args;
     bwa_args.push_back("mem");
-    bwa_args.push_back("-Ma");
+    //bwa_args.push_back("-Ma");    // TODO: parse argument from GATK 4 argument
     bwa_args.push_back("-R");
     bwa_args.push_back(read_group_header_line);
     bwa_args.push_back(index_file_name);
