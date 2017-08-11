@@ -18,6 +18,9 @@ int main(int argc, char* argv[])
         ("o,output-fastq", "Output fastq file prefix", cxxopts::value<string>())
         ("I,paired-input-fastq", "Paired input fastq file name", cxxopts::value<string>())
         ("O,paired-output-fastq", "Paired output fastq file prefix", cxxopts::value<string>())
+        ("hdfs-buffer-size", "HDFS buffer size", cxxopts::value<int>()->default_value("0"))
+        ("hdfs-replication", "HDFS replication", cxxopts::value<short>()->default_value("3"))
+        ("hdfs-block-size", "HDFS block size", cxxopts::value<size_t>()->default_value("0"))
         ;
 
     options.parse(argc, argv);
@@ -65,7 +68,7 @@ int main(int argc, char* argv[])
         pclose(fp);
     }
 
-    SplitFASTQ(kVerboseFlag, kBatchSize, kInputFastq1, kOutputFastq1, kInputFastq2, kOutputFastq2);
+    SplitFASTQ(kVerboseFlag, kBatchSize, kInputFastq1, kOutputFastq1, kInputFastq2, kOutputFastq2, options["hdfs-buffer-size"].as<int>(), options["hdfs-replication"].as<short>(), options["hdfs-block-size"].as<size_t>());
 
     return 0;
 }
