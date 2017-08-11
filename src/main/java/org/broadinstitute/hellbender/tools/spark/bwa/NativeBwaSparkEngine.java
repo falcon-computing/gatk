@@ -74,6 +74,7 @@ public final class NativeBwaSparkEngine implements Serializable, AutoCloseable {
             System.loadLibrary("gatkbwa");
             initNativeAlign();
             List<SAMRecord> samRecordList =  doNativeAlign(e._1(), e._2(), e._3().longValue());
+            closeNativeAlign();
             return samRecordList.iterator();
         }).map(e -> new SAMRecordToGATKReadAdapter(e));
     }

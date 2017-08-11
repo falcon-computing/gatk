@@ -1,9 +1,12 @@
 #include<string.h>
 
+#include<atomic>
+#include<chrono>
 #include<iostream>
 #include<mutex>
 #include<string>
 #include<thread>
+#include<tuple>
 #include<vector>
 
 #include<bwa.h>
@@ -24,12 +27,8 @@ using namespace std;
  * before calling doNativeAlign by calling initNativeAlign. When no longer
  * needed, call closeNativeAlign to release native memory.
  *
- * Note that JVM does not manage objects created in native code here (mainly
- * BAMRecords); holding these objects requires a lot of memory but releasing
- * them too soon will crash the JVM.
- *
- * Calling initNativeAlign and closeNativeAlign multiple times is safe; aux is
- * protected with a mutex lock and repeated calls will be ignored.
+ * In practice, initNativeAlign MUST be called before EVERY doNativeAlign call
+ * and closeNativeAlign MUST be called after EVERY doNativeAlign call.
  */
 
 ktp_aux_t* aux = nullptr;
@@ -42,6 +41,9 @@ size_t total_output_count = 0;
 mutex total_output_count_mutex;
 size_t total_input_count = 0;
 mutex total_input_count_mutex;
+atomic<unsigned> total_jni_threads(0);
+atomic<unsigned> total_working_threads(0);
+mutex priority_mutex;
 
 int hdfs_buffer_size = 0;
 short hdfs_replication = 0;
@@ -277,6 +279,15 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
     jobject bam_record_list = env->NewObject(java_util_ArrayList, java_util_ArrayList_, 1<<16); // TODO: better guess on init capacity
 
     bool all_right = true;
+
+    /* Here priority is used to give a JNI thread the priority to issue
+     * threads. If there are more threads to issue than the hardware
+     * concurrency, it is preferred to focus on one JNI thread so that Spark
+     * can receive the finished task one by one instead of batch by batch.
+     */
+    bool priority = false;
+
+    vector<tuple<thread, bseq1_t*, int>> threads;
     for(;;)
     {
         bseq1_t* seqs = bseq_read(aux->actual_chunk_size, &read_count, fastq_kseq1, fastq_kseq2);
@@ -284,15 +295,24 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
         {
             break;
         }
-        clog<<"libgatkbwa:INFO Get "<<read_count<<" sequences\n";
         total_input_count_mutex.lock();
         total_input_count += read_count;
         total_input_count_mutex.unlock();
 
-        AlignSeqs(seqs, read_count, start_idx, kIsPaired);
-
+        for(;total_working_threads>thread::hardware_concurrency();) this_thread::sleep_for(chrono::microseconds(1));
+        for(;!priority && !(priority = priority_mutex.try_lock());) this_thread::sleep_for(chrono::microseconds(1));
+        total_working_threads++;
+        clog<<"libgatkbwa:INFO Issue "<<read_count<<" reads in batch "<<threads.size()<<" of JNI thread "<<this_thread::get_id()<<"\n";
+        threads.push_back(make_tuple(thread(AlignSeqs, seqs, read_count, start_idx, kIsPaired), seqs, read_count));
         start_idx += read_count;
+    }
+    priority_mutex.unlock();
 
+    for(auto& t: threads)
+    {
+        get<0>(t).join();
+        bseq1_t* seqs = get<1>(t);
+        read_count = get<2>(t);
         for(int i = 0; i < read_count; ++i)
         {
             for(int j = 0; j < seqs[i].bams->l && all_right; ++j)
@@ -398,6 +418,7 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
 JNIEXPORT void JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_initNativeAlign(JNIEnv* env, jobject obj)
 {
     aux_mutex.lock();
+    total_jni_threads++;
     if(aux!=nullptr)
     {
         clog<<"libgatkbwa:INFO Native resources already initialized\n";
@@ -521,6 +542,13 @@ JNIEXPORT void JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Native
 JNIEXPORT void JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_closeNativeAlign(JNIEnv* env, jobject obj)
 {
     aux_mutex.lock();
+    total_jni_threads--;
+    if(total_jni_threads>0)
+    {
+        clog<<"libgatkbwa:WARNING Native resource still in use\n";
+        aux_mutex.unlock();
+        return;
+    }
     if(aux == nullptr)
     {
         clog<<"libgatkbwa:WARNING No native resource found\n";
@@ -707,4 +735,5 @@ void AlignSeqs(bseq1_t* seqs, int read_count, uint64_t start_idx, const bool kIs
         free(seqs[i].seq);
         free(seqs[i].qual);
     }
+    total_working_threads--;
 }
