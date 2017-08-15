@@ -118,12 +118,6 @@ public class ReadsPipelineSpark extends GATKSparkTool {
     @Argument(doc = "number of read [pairs] in each fastq split", fullName = "fastqSplitSize", optional = true)
     protected long fastqSplitSize = 0L;
 
-    @Argument(doc = "dump bwa results in BAM (currently broken)", fullName = "bwaResultBAM", optional = true)
-    protected String bwaResultBAM = null;
-
-    @Argument(doc = "dump bwa results in SAM", fullName = "bwaResultSAM", optional = true)
-    protected String bwaResultSAM = null;
-
     @Argument(doc = "Complete read group header line. ’\t’ can be used in STR and will be converted to a TAB in the output SAM. The read group ID will be attached to every read in the output. An example is ’@RG\tID:foo\tSM:bar’.", fullName = "readGroupHeaderLine", optional = true)
     protected String readGroupHeaderLine = null;
 
@@ -264,39 +258,6 @@ public class ReadsPipelineSpark extends GATKSparkTool {
 
         final JavaRDD<GATKRead> initialReads = rawReads.filter(read -> wellformedReadFilter.test(read));
         initialReads.persist(org.apache.spark.api.java.StorageLevels.MEMORY_AND_DISK);
-
-        if(bwaResultBAM != null || bwaResultSAM != null)
-        {
-            System.err.println("Get "+rawReads.count()+" reads");
-            System.err.println("Get "+initialReads.count()+" wellformed reads");
-
-            if(bwaResultBAM != null) {
-                String outputFile = bwaResultBAM;
-                try {
-                    ReadsSparkSink.writeReads(ctx, outputFile,
-                            hasReference() ? referenceArguments.getReferenceFile().getAbsolutePath() : null,
-                            rawReads, getHeaderForReads(), shardedOutput ? ReadsWriteFormat.SHARDED : ReadsWriteFormat.SINGLE,
-                            getRecommendedNumReducers());
-                } catch (IOException e) {
-                    throw new UserException.CouldNotCreateOutputFile(outputFile,"writing failed", e);
-                }
-            }
-
-            if(bwaResultSAM != null) {
-                String outputFile = bwaResultSAM;
-                BufferedWriter out = null;
-                try {
-                    out = new BufferedWriter(new FileWriter(bwaResultSAM, false));
-                    for(GATKRead read: rawReads.collect()) {
-                        out.write(read.getSAMString());
-                    }
-                    out.close();
-                } catch (IOException e)
-                {
-                    System.err.println("Error: " + e.getMessage());
-                }
-            }
-        }
 
         if (joinStrategy == JoinStrategy.BROADCAST && ! getReference().isCompatibleWithSparkBroadcast()){
             throw new UserException.Require2BitReferenceForBroadcast();
