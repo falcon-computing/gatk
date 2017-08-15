@@ -110,6 +110,9 @@ public class ReadsPipelineSpark extends GATKSparkTool {
     @Argument(doc = "another input [gzipped] fastq file prefix", fullName = "inputFastq2", optional = true)
     protected String inputFastq2 = null;
 
+    @Argument(doc = "whether to persist markedReads", fullName = "persistMarkedReads", optional = true)
+    protected boolean persistMarkedReads = false;
+
     /* This argument helps to calculate the start_idx parameter. If not set,
      * start_idx will always be zero. At this time, there is no check on
      * whether this argument is consistent with the split size. Wrong value
@@ -254,10 +257,9 @@ public class ReadsPipelineSpark extends GATKSparkTool {
         final WellformedReadFilter wellformedReadFilter = new WellformedReadFilter(getHeaderForReads());
         final JavaRDD<GATKRead> rawReads = bwaEngine.align(fastqRecords);
 
-        rawReads.persist(org.apache.spark.api.java.StorageLevels.MEMORY_AND_DISK);
+        rawReads.persist(org.apache.spark.api.java.StorageLevels.MEMORY_AND_DISK_SER);
 
         final JavaRDD<GATKRead> initialReads = rawReads.filter(read -> wellformedReadFilter.test(read));
-        initialReads.persist(org.apache.spark.api.java.StorageLevels.MEMORY_AND_DISK);
 
         if (joinStrategy == JoinStrategy.BROADCAST && ! getReference().isCompatibleWithSparkBroadcast()){
             throw new UserException.Require2BitReferenceForBroadcast();
@@ -266,6 +268,10 @@ public class ReadsPipelineSpark extends GATKSparkTool {
         // mark duplicates
         final JavaRDD<GATKRead> markedReadsWithOD = MarkDuplicatesSpark.mark(initialReads, getHeaderForReads(), duplicatesScoringStrategy, new OpticalDuplicateFinder(), getRecommendedNumReducers());
         final JavaRDD<GATKRead> markedReads = MarkDuplicatesSpark.cleanupTemporaryAttributes(markedReadsWithOD);
+        if(persistMarkedReads)
+        {
+            markedReads.persist(org.apache.spark.api.java.StorageLevels.MEMORY_AND_DISK_SER);
+        }
 
         // The markedReads have already had the WellformedReadFilter applied to them, which
         // is all the filtering that MarkDupes and ApplyBQSR want. BQSR itself wants additional
@@ -287,6 +293,12 @@ public class ReadsPipelineSpark extends GATKSparkTool {
 
         final JavaPairRDD<GATKRead, ReadContextData> rddReadContext = AddContextDataToReadSpark.add(ctx, markedFilteredReadsForBQSR, getReference(), bqsrKnownVariants, baseRecalibrationKnownVariants, joinStrategy, getHeaderForReads().getSequenceDictionary(), readShardSize, readShardPadding);
         final RecalibrationReport bqsrReport = BaseRecalibratorSparkFn.apply(rddReadContext, getHeaderForReads(), getReferenceSequenceDictionary(), bqsrArgs);
+
+        // there is a treeAggregate up there, if we are to unpersist rawReads, this is the time
+        if(persistMarkedReads)
+        {
+            rawReads.unpersist();
+        }
 
         final Broadcast<RecalibrationReport> reportBroadcast = ctx.broadcast(bqsrReport);
         final JavaRDD<GATKRead> calibratedReads = ApplyBQSRSparkFn.apply(markedReads, reportBroadcast, getHeaderForReads(), applyBqsrArgs.toApplyBQSRArgumentCollection(bqsrArgs.PRESERVE_QSCORES_LESS_THAN));
