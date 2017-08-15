@@ -102,7 +102,7 @@ static void WriteHDFS(int read_fd, hdfsFS hdfs_fs, hdfsFile hdfs_file)
     delete[] buffer;
 }
 
-void SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& kInputFastq1, const string& kOutputFastq1, const string& kInputFastq2, const string& kOutputFastq2, const int kHDFSBufferSize = 0, const short kHDFSReplication = 0, const size_t kHDFSBlockSize = 0)
+void SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& kInputFastq1, const string& kOutputFastq1, const string& kInputFastq2, const string& kOutputFastq2, const int kHDFSBufferSize = 0, const short kHDFSReplication = 0, const size_t kHDFSBlockSize = 0, const int8_t kCompressionLevel = 1)
 {
     // local parameters
     vector<pid_t> children;
@@ -267,13 +267,15 @@ void SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& k
             break;
         }
 
+        char gz_write_mode[3] = "w0";
+        gz_write_mode[1] += (kCompressionLevel>=0 && kCompressionLevel<=9) ? kCompressionLevel : 1;
         // write the outputs
         if(kOutput1IsHDFS)
         {
             string output_filename_string = output_fastq1_hdfs_path+".part"+to_string(batch_id);
             int write_pipe[2];
             pipe(write_pipe);
-            gzFile output_file1 = gzdopen(write_pipe[1], "w1");
+            gzFile output_file1 = gzdopen(write_pipe[1], gz_write_mode);
             hdfsFile hdfs_file1 = hdfsOpenFile(hdfs_fs1, output_filename_string.c_str(), O_WRONLY,
                 kHDFSBufferSize, kHDFSReplication, kHDFSBlockSize);
             if(hdfs_file1==nullptr)
@@ -287,7 +289,7 @@ void SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& k
         else
         {
             string output_filename_string = kOutputFastq1+".part"+to_string(batch_id);
-            gzFile output_file1 = gzopen(output_filename_string.c_str(), "w1");
+            gzFile output_file1 = gzopen(output_filename_string.c_str(), gz_write_mode);
             threads.push_back(thread(WriteBatch, output1, line_count1, output_file1));
         }
 
@@ -298,7 +300,7 @@ void SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& k
                 string output_filename_string = output_fastq2_hdfs_path+".part"+to_string(batch_id);
                 int write_pipe[2];
                 pipe(write_pipe);
-                gzFile output_file2 = gzdopen(write_pipe[1], "w1");
+                gzFile output_file2 = gzdopen(write_pipe[1], gz_write_mode);
                 hdfsFile hdfs_file2 = hdfsOpenFile(hdfs_fs2, output_filename_string.c_str(), O_WRONLY,
                     kHDFSBufferSize, kHDFSReplication, kHDFSBlockSize);
                 if(hdfs_file2==nullptr)
@@ -312,7 +314,7 @@ void SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& k
             else
             {
                 string output_filename_string = kOutputFastq2+".part"+to_string(batch_id);
-                gzFile output_file2 = gzopen(output_filename_string.c_str(), "w1");
+                gzFile output_file2 = gzopen(output_filename_string.c_str(), gz_write_mode);
                 threads.push_back(thread(WriteBatch, output2, line_count2, output_file2));
             }
         }
