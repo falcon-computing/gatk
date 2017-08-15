@@ -302,8 +302,8 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
         for(;total_working_threads>thread::hardware_concurrency();) this_thread::sleep_for(chrono::microseconds(1));
         for(;!priority && !(priority = priority_mutex.try_lock());) this_thread::sleep_for(chrono::microseconds(1));
         total_working_threads++;
-        clog<<"libgatkbwa:INFO Issue "<<read_count<<" reads in batch "<<threads.size()<<" of JNI thread "<<this_thread::get_id()<<"\n";
         threads.push_back(make_tuple(thread(AlignSeqs, seqs, read_count, start_idx, kIsPaired), seqs, read_count));
+        clog<<"libgatkbwa:INFO Issue "<<read_count<<" reads in thread "<<get<0>(*threads.rbegin()).get_id()<<"batch "<<threads.size()<<" of JNI thread "<<this_thread::get_id()<<" at time "<<chrono::duration_cast<chrono::nanoseconds>(chrono::high_resolution_clock::now().time_since_epoch()).count()<<"\n";
         start_idx += read_count;
     }
     priority_mutex.unlock();
@@ -735,5 +735,6 @@ void AlignSeqs(bseq1_t* seqs, int read_count, uint64_t start_idx, const bool kIs
         free(seqs[i].seq);
         free(seqs[i].qual);
     }
+    clog<<"libgatkbwa:INFO finish "<<read_count<<" reads in thread "<<this_thread::get_id()<<" at time "<<chrono::duration_cast<chrono::nanoseconds>(chrono::high_resolution_clock::now().time_since_epoch()).count()<<"\n";
     total_working_threads--;
 }
