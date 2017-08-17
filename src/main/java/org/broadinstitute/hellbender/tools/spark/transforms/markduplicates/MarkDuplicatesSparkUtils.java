@@ -55,7 +55,7 @@ public class MarkDuplicatesSparkUtils {
                 return 0;
 	long result = 0;
 	for (int i = 0; i < a.length(); i++){
-		result = result * 31 *31 + a.charAt(i);
+		result = result * 31 * 31 + a.charAt(i);
 	}
 	return result;
     }
@@ -155,20 +155,22 @@ public class MarkDuplicatesSparkUtils {
 				Short nextLibraryId, String readGroupId){
         final String library = getLibraryName(header, readGroupId);
         Short libraryId = libraryIds.get(library);
-
         if (libraryId == null) {
             libraryId = nextLibraryId++;
             libraryIds.put(library, libraryId);
         }
-
         return libraryId;
   }
 
-  static long keyForSingleRead(GATKRead read){
-  	if(read.isFirstOfPair()){
-		return keyForRead2(read) * 31 + 1;
-	}
-	return keyForRead2(read) * 31 + 2;
+  static long keyForSingleRead(GATKRead read, Map<Long, Boolean> ReadId){
+  	long result = keyForRead2(read);
+        while(ReadId.containsKey(result)){result++;}
+	ReadId.put(result, true);
+        return result;
+  }
+  static long keyForReadName(GATKRead read){
+	long result = keyForRead2(read);
+	return result;
   }
 	
     static JavaRDD<GATKRead> transformReads(final SAMFileHeader header, final MarkDuplicatesScoringStrategy scoringStrategy, final OpticalDuplicateFinder finder, final JavaRDD<GATKRead> reads, final int numReducers) {
@@ -210,7 +212,7 @@ public class MarkDuplicatesSparkUtils {
             }
             if (score != -1) {                                    //left over read
                 out.add(new Tuple2<>((myHashCode(key2ForLeftover(pair, header, getLibraryId(header, libraryIds, nextLibraryId, 
-				pair.first().getReadGroup()))) & 0x3fffffffffffffffL) | 0x4fffffffffffffffL ,
+				pair.first().getReadGroup()))) & 0x3fffffffffffffffL) | 0x4000000000000000L ,
 				 new Tuple2<>(keyedRead._1(),score))); // Pair key for single read top two bits 01
             }
             return out.iterator();
@@ -235,16 +237,17 @@ public class MarkDuplicatesSparkUtils {
 	else {
 		Map<String, Short> libraryIds = new LinkedHashMap<>(); // from library string to library id
 		short nextLibraryId = 1;
+                Map<Long, Boolean> readIdMap = new LinkedHashMap<>();
 		JavaPairRDD<Long, GATKRead> keyedReads = reads.mapToPair(read -> 
-			new Tuple2<>(keyForSingleRead(read), read));
-
+			new Tuple2<>(keyForSingleRead(read, readIdMap), read));
+		
 		JavaPairRDD<Long, Iterable<Tuple3<Long, Long, Integer>>> keyedReads2 = keyedReads.mapToPair(keyedRead -> {
 			List<Tuple2<Long, Tuple3<Long, Long, Integer>>> out = Lists.newArrayList();
 			int score = scoringStrategy.score(keyedRead._2());
 			if (!ReadUtils.readHasMappedMate(keyedRead._2())) {score = ~score;}
 			long locKey = myHashCode(keyForFragment2(keyedRead._2(), header, getLibraryId(header, libraryIds,
 				 nextLibraryId, keyedRead._2().getReadGroup())));
-			long namekey = keyForRead2(keyedRead._2());
+			long namekey = keyForReadName(keyedRead._2());
 			return new Tuple2<Long, Tuple3<Long, Long, Integer>>(namekey, new Tuple3<Long, Long, Integer>
 				(locKey, keyedRead._1(), score));
 		}).groupByKey(numReducers);
@@ -255,27 +258,27 @@ public class MarkDuplicatesSparkUtils {
 				out.add(new Tuple2<Long, Tuple3<Long, Long, Integer>>((tuple._1() & 0x3fffffffffffffffL) 
 					| 0x8000000000000000L, new Tuple3<Long, Long, Integer>(tuple._2(), 0L, tuple._3())));
 			}
-			int score = 0;
+			int score = -1;
 			long locKey = 0;
 			long id1 = 0;
 			for (Tuple3<Long, Long, Integer> tuple : keyedRead._2()){
 				if (tuple._3() < 0) {break;}
-				if (score == 0){
-					score += tuple._3();
+				if (score == -1){
+					score = tuple._3();
 					locKey += tuple._1();
 					id1 = tuple._2();
 				}else{
 					score += tuple._3();
-					locKey += tuple._1();
+					locKey *= tuple._1();
 					out.add(new Tuple2<Long, Tuple3<Long, Long, Integer>>(locKey & 0x3fffffffffffffffL, 
 						new Tuple3<Long, Long, Integer>(id1, tuple._2(), score)));
-					score = 0;
+					score = -1;
 					locKey = 0;
 				}
 			}
-			if (score != 0){
+			if (score != -1){
 				out.add(new Tuple2<Long, Tuple3<Long, Long, Integer>>((locKey & 0x3fffffffffffffffL)
-					| 0x4fffffffffffffffL, new Tuple3<Long, Long, Integer>(id1, 0L, score)));
+					| 0x4000000000000000L, new Tuple3<Long, Long, Integer>(id1, 0L, score)));
 			}
 			return out.iterator();
 		}).groupByKey(numReducers);
@@ -291,16 +294,16 @@ public class MarkDuplicatesSparkUtils {
                         out.add(tmp._1);
                 	return out.iterator();
         	});
-	}
+	  }
     }
     
     static JavaPairRDD<Long, Boolean> markPairedEnds3(final JavaPairRDD<Long, Iterable<Tuple3<Long, Long, Integer>>> keyedValues){
     	return keyedValues.flatMapToPair(keyedValue -> {
 	    Iterable<Tuple3<Long, Long, Integer>> keyedScores = keyedValue._2();
+	    List<Tuple2<Long, Boolean>> out = Lists.newArrayList();    
 	    if (keyedValue._1() < 0) {
 		return handleFragments3(keyedScores).iterator();
 	    }
-	    List<Tuple2<Long, Boolean>> out = Lists.newArrayList();
 	    if((keyedValue._1() & 0x4000000000000000L) != 0){
                 for (Iterator<Tuple3<Long, Long, Integer>> it = keyedScores.iterator(); it.hasNext();){
                         out.add(new Tuple2<Long, Boolean>(it.next()._1(), false));
@@ -417,9 +420,7 @@ public class MarkDuplicatesSparkUtils {
             return out.iterator();
         });
     }
-    
     private static List<Tuple2<Long, Boolean>> handleFragments2(Iterable<Tuple2<Long, Integer>> keyedScores) {
-        
 	boolean ifPairFlag = false;
 	for(Iterator<Tuple2<Long, Integer>> it = keyedScores.iterator(); it.hasNext();){
 		if(it.next()._2 >= 0){
@@ -448,8 +449,7 @@ public class MarkDuplicatesSparkUtils {
 			if (id == bestScorePlace) {flag = true;}
 			flags.add(new Tuple2<Long, Boolean>(it.next()._1, flag));
 			id++;
-		}
-	
+		}	
 	} else {
             // There are paired ends so we mark all fragments as duplicates.
         	for (Iterator<Tuple2<Long, Integer>> it = keyedScores.iterator(); it.hasNext();){
