@@ -113,6 +113,9 @@ public class ReadsPipelineSpark extends GATKSparkTool {
     @Argument(doc = "whether to persist markedReads", fullName = "persistMarkedReads", optional = true)
     protected boolean persistMarkedReads = false;
 
+    @Argument(doc = "whether to persist in serialized form", fullName = "persistSerialized", optional = true)
+    protected boolean persistSerialized= true;
+
     /* This argument helps to calculate the start_idx parameter. If not set,
      * start_idx will always be zero. At this time, there is no check on
      * whether this argument is consistent with the split size. Wrong value
@@ -257,7 +260,7 @@ public class ReadsPipelineSpark extends GATKSparkTool {
         final WellformedReadFilter wellformedReadFilter = new WellformedReadFilter(getHeaderForReads());
         final JavaRDD<GATKRead> rawReads = bwaEngine.align(fastqRecords);
 
-        rawReads.persist(org.apache.spark.api.java.StorageLevels.MEMORY_AND_DISK_SER);
+        rawReads.persist(persistSerialized ? org.apache.spark.api.java.StorageLevels.MEMORY_AND_DISK_SER : org.apache.spark.api.java.StorageLevels.MEMORY_AND_DISK);
 
         final JavaRDD<GATKRead> initialReads = rawReads.filter(read -> wellformedReadFilter.test(read));
 
@@ -270,7 +273,7 @@ public class ReadsPipelineSpark extends GATKSparkTool {
         final JavaRDD<GATKRead> markedReads = MarkDuplicatesSpark.cleanupTemporaryAttributes(markedReadsWithOD);
         if(persistMarkedReads)
         {
-            markedReads.persist(org.apache.spark.api.java.StorageLevels.MEMORY_AND_DISK_SER);
+            markedReads.persist(persistSerialized ? org.apache.spark.api.java.StorageLevels.MEMORY_AND_DISK_SER : org.apache.spark.api.java.StorageLevels.MEMORY_AND_DISK);
         }
 
         // The markedReads have already had the WellformedReadFilter applied to them, which
