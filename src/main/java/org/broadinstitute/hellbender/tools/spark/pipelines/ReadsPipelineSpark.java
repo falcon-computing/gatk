@@ -273,7 +273,9 @@ public class ReadsPipelineSpark extends GATKSparkTool {
                                     new Tuple3<String, String, Long>(inputSplittedFastq1+".part"+i, inputSplittedFastq2!=null ? inputSplittedFastq2+".part"+i : null, new Long((long)i*fastqSplitSize))
                                 );
                             } else {
-                                numReducers = i;
+                                if(numReducers==0) {
+                                    numReducers = i;
+                                }
                                 break;
                             }
                         }
@@ -308,8 +310,12 @@ public class ReadsPipelineSpark extends GATKSparkTool {
                     fastqSplitParamsList.add(fastqSplitParams);
                     fastqRecords = NativeSplitFastqSparkEngine.split(ctx.parallelize(fastqSplitParamsList, 1));
                     fastqRecords.setName("fastqRecords").cache();
-                    fastqRecords = fastqRecords.repartition((int)fastqRecords.count());
+                    int numSplit = (int)fastqRecords.count();
+                    fastqRecords = fastqRecords.repartition(numSplit);
                     fastqRecords.setName("fastqRecords").cache();
+                }
+                if(numReducers==0) {
+                    numReducers = fastqRecords.getNumPartitions();
                 }
             }
         } catch (IOException e) {
@@ -410,10 +416,11 @@ public class ReadsPipelineSpark extends GATKSparkTool {
 
     @Override
     public int getRecommendedNumReducers() {
-      if (numReducers != 0) {
-          return numReducers;
+      if (numReducers == 0) {
+          // although 0 is the default, it should have been changed during the initiation
+          throw new UserException("numReducers is 0");
       }
-      return 32;  // TODO: make it work
+      return numReducers;
     }
 
 		/**
