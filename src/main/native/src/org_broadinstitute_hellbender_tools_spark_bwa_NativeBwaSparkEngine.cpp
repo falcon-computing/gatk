@@ -303,7 +303,7 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
         for(;!priority && !(priority = priority_mutex.try_lock());) this_thread::sleep_for(chrono::microseconds(1));
         total_working_threads++;
         threads.push_back(make_tuple(thread(AlignSeqs, seqs, read_count, start_idx, kIsPaired), seqs, read_count));
-        clog<<"libgatkbwa:INFO Issue "<<read_count<<" reads in thread "<<get<0>(*threads.rbegin()).get_id()<<"batch "<<threads.size()<<" of JNI thread "<<this_thread::get_id()<<" at time "<<chrono::duration_cast<chrono::nanoseconds>(chrono::high_resolution_clock::now().time_since_epoch()).count()<<"\n";
+        clog<<"libgatkbwa:INFO Issue "<<read_count<<" reads in thread "<<get<0>(*threads.rbegin()).get_id()<<" (batch "<<threads.size()<<" of JNI thread "<<this_thread::get_id()<<") at time "<<chrono::duration_cast<chrono::nanoseconds>(chrono::high_resolution_clock::now().time_since_epoch()).count()<<"\n";
         start_idx += read_count;
     }
     priority_mutex.unlock();
