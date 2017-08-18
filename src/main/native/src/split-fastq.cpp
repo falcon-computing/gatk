@@ -136,7 +136,7 @@ int SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& kI
         close(input_pipe1[1]);
         char input_filename[1<<16] = {};
         strncpy(input_filename, kInputFastq1.c_str(), kInputFastq1.size());
-        char* args[3] = {gzip, decompress, input_filename};
+        char* args[4] = {gzip, decompress, input_filename, nullptr};
         execvp(gzip, args);
         clog<<"ERROR: Cannot exec gzip: "<<strerror(errno)<<endl;
         exit(2);
@@ -173,7 +173,7 @@ int SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& kI
             close(input_pipe2[1]);
             char input_filename[1<<16] = {};
             strncpy(input_filename, kInputFastq2.c_str(), kInputFastq2.size());
-            char* args[3] = {gzip, decompress, input_filename};
+            char* args[4] = {gzip, decompress, input_filename, nullptr};
             execvp(gzip, args);
             clog<<"ERROR: Cannot exec gzip: "<<strerror(errno)<<endl;
             exit(2);
