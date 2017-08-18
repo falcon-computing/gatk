@@ -35,15 +35,18 @@ public final class NativeBwaSparkEngine implements Serializable, AutoCloseable {
     private static final long serialVersionUID = 0L;
     private final String indexFileName;
     private final String readGroupHeaderLine;
+    private final String bwaOptions;
     private String headerString = null;
     private SAMFileHeader headerObject = null;
 
     public NativeBwaSparkEngine(final String indexFileName,
-                                final String readGroupHeaderLine) {
+                                final String readGroupHeaderLine,
+                                final String bwaOptions) {
         Utils.nonNull(indexFileName);
         Utils.nonNull(readGroupHeaderLine);
         this.indexFileName = indexFileName;
         this.readGroupHeaderLine = readGroupHeaderLine;
+        this.bwaOptions = bwaOptions;
 
         // needed for generating header
         System.loadLibrary("gatkbwa");

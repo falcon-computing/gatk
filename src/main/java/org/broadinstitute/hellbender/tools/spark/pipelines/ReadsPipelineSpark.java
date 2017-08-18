@@ -144,6 +144,9 @@ public class ReadsPipelineSpark extends GATKSparkTool {
     @Argument(doc = "Complete read group header line. ’\t’ can be used in STR and will be converted to a TAB in the output SAM. The read group ID will be attached to every read in the output. An example is ’@RG\tID:foo\tSM:bar’.", fullName = "readGroupHeaderLine", optional = true)
     protected String readGroupHeaderLine = null;
 
+    @Argument(doc = "Misc bwa options, for example, '-Ma -k 19'. Avaiable options are 'kwdrcPABOELUpTaCHMv', see bwa(1) for details. The read group header line must be given through the `--readGroupHeaderLine` option.", fullName = "bwaOptions", optional = true)
+    protected String bwaOptions = null;
+
     @Override
     public SAMFileHeader getHeaderForReads() {
         if(readsHeader == null) {
@@ -316,7 +319,7 @@ public class ReadsPipelineSpark extends GATKSparkTool {
         }
 
         // bwa
-        final NativeBwaSparkEngine bwaEngine = new NativeBwaSparkEngine(indexImageFile, readGroupHeaderLine);
+        final NativeBwaSparkEngine bwaEngine = new NativeBwaSparkEngine(indexImageFile, readGroupHeaderLine, bwaOptions);
         setHeaderForReads(bwaEngine.getHeaderString());
         bwaEngine.setHeaderObject(getHeaderForReads());
 

@@ -125,7 +125,7 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
     jclass org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine;
     jfieldID org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_headerObject_;
 
-    org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine = 
+    org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine =
         env->FindClass("org/broadinstitute/hellbender/tools/spark/bwa/NativeBwaSparkEngine");
     if(nullptr==org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine)
     {
@@ -138,8 +138,8 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
     {
         clog<<"libgatkbwa:ERROR Cannot find field headerObject"<<std::endl;
     }
-    jobject org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_headerObject = 
-        (jobject)env->GetObjectField(obj, 
+    jobject org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_headerObject =
+        (jobject)env->GetObjectField(obj,
             org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_headerObject_);
 
     // get C++ filename from Java String
@@ -395,7 +395,7 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
     {
         gzclose(fastq_gzfile2);
     }
-    
+
     kseq_destroy(fastq_kseq1);
     kseq_destroy(fastq_kseq2);
 
@@ -430,14 +430,17 @@ JNIEXPORT void JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Native
     // org.broadinstitute.hellbender.tools.spark.bwa.NativeBwaSparkEngine
     const char* index_file_name;
     const char* read_group_header_line;
+    const char* bwa_options;
     jclass org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine;
     jfieldID org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_indexFileName_;
     jfieldID org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_readGroupHeaderLine_;
+    jfieldID org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_bwaOptions_;
     jfieldID org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_headerString_;
     jstring org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_indexFileName;
     jstring org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_readGroupHeaderLine;
+    jstring org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_bwaOptions;
 
-    org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine = 
+    org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine =
         env->FindClass("org/broadinstitute/hellbender/tools/spark/bwa/NativeBwaSparkEngine");
     if(nullptr==org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine)
     {
@@ -457,6 +460,13 @@ JNIEXPORT void JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Native
     {
         clog<<"libgatkbwa:ERROR Cannot find field readGroupHeaderLine"<<std::endl;
     }
+    org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_bwaOptions_ =
+        env->GetFieldID(org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine,
+            "bwaOptions", "Ljava/lang/String;");
+    if(nullptr==org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_bwaOptions_)
+    {
+        clog<<"libgatkbwa:ERROR Cannot find field bwaOptions"<<std::endl;
+    }
     org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_headerString_ =
         env->GetFieldID(org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine,
             "headerString", "Ljava/lang/String;");
@@ -464,12 +474,15 @@ JNIEXPORT void JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Native
     {
         clog<<"libgatkbwa:ERROR Cannot find field headerString"<<std::endl;
     }
-    org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_indexFileName = 
-        (jstring)env->GetObjectField(obj, 
+    org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_indexFileName =
+        (jstring)env->GetObjectField(obj,
             org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_indexFileName_);
-    org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_readGroupHeaderLine = 
-        (jstring)env->GetObjectField(obj, 
+    org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_readGroupHeaderLine =
+        (jstring)env->GetObjectField(obj,
             org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_readGroupHeaderLine_);
+    org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_bwaOptions =
+        (jstring)env->GetObjectField(obj,
+            org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_bwaOptions_);
 
     // bwa parameters
     index_file_name = env->GetStringUTFChars(
@@ -480,15 +493,35 @@ JNIEXPORT void JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Native
         org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_readGroupHeaderLine,
         nullptr);
     clog<<"libgatkbwa:INFO Using read group header: "<<read_group_header_line<<std::endl;
+    if(!env->IsSameObject(org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_bwaOptions, nullptr))
+    {
+        bwa_options = env->GetStringUTFChars(
+            org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_bwaOptions,
+            nullptr);
+        clog<<"libgatkbwa:INFO Using bwaOptions: \""<<bwa_options<<"\""<<std::endl;
+    }
+    else
+    {
+        bwa_options = nullptr;
+    }
 
     aux = new ktp_aux_t;
     memset(aux, 0, sizeof(ktp_aux_t));
 
     vector<const char*> bwa_args;
     bwa_args.push_back("mem");
-    //bwa_args.push_back("-Ma");    // TODO: parse argument from GATK 4 argument
     bwa_args.push_back("-R");
     bwa_args.push_back(read_group_header_line);
+    char* bwa_options_string = nullptr;
+    if(bwa_options!=nullptr)
+    {
+        bwa_options_string = new char[strlen(bwa_options)+1]();
+        strcpy(bwa_options_string, bwa_options);
+        for(char* token = strtok(bwa_options_string, " "); token!=nullptr; token = strtok(nullptr, " "))
+        {
+            bwa_args.push_back(token);
+        }
+    }
     bwa_args.push_back(index_file_name);
     // placeholders, prevent preprocess from complaining
     bwa_args.push_back("");
@@ -530,6 +563,13 @@ JNIEXPORT void JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Native
     env->ReleaseStringUTFChars(
         org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_readGroupHeaderLine,
         read_group_header_line);
+    env->ReleaseStringUTFChars(
+        org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_bwaOptions,
+        bwa_options);
+    if(bwa_options_string!=nullptr)
+    {
+        delete[] bwa_options_string;
+    }
     clog<<"libgatkbwa:INFO Native resources initialized\n";
     aux_mutex.unlock();
     total_input_count_mutex.lock();
@@ -674,7 +714,7 @@ void AlignSeqs(bseq1_t* seqs, int read_count, uint64_t start_idx, const bool kIs
         }
     }
 
-    if(kIsPaired)
+    if(kIsPaired || aux->opt->flag & MEM_F_SMARTPE)
     {
         mem_pestat_t pes[4];
         mem_pestat(aux->opt, aux->idx->bns->l_pac, read_count, alnreg, pes);
