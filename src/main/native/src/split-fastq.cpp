@@ -102,8 +102,9 @@ static void WriteHDFS(int read_fd, hdfsFS hdfs_fs, hdfsFile hdfs_file)
     delete[] buffer;
 }
 
-void SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& kInputFastq1, const string& kOutputFastq1, const string& kInputFastq2, const string& kOutputFastq2, const int kHDFSBufferSize = 0, const short kHDFSReplication = 0, const size_t kHDFSBlockSize = 0, const int8_t kCompressionLevel = 1)
+int SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& kInputFastq1, const string& kOutputFastq1, const string& kInputFastq2, const string& kOutputFastq2, const int kHDFSBufferSize = 0, const short kHDFSReplication = 0, const size_t kHDFSBlockSize = 0, const int8_t kCompressionLevel = 1)
 {
+    // TODO: cannot read input from HDFS
     // local parameters
     vector<pid_t> children;
     vector<thread> threads;
@@ -325,6 +326,8 @@ void SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& k
         }
     }
 
+    int num_splits = batch_id;
+
     // delete extra files
     for(;;++batch_id)
     {
@@ -419,5 +422,7 @@ void SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& k
     {
         hdfsDisconnect(hdfs_fs2);
     }
+
+    return int(num_splits);
 }
 
