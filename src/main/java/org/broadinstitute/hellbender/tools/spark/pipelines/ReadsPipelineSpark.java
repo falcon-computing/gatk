@@ -258,19 +258,19 @@ public class ReadsPipelineSpark extends GATKSparkTool {
         bwaEngine.setHeaderObject(getHeaderForReads());
 
         final WellformedReadFilter wellformedReadFilter = new WellformedReadFilter(getHeaderForReads());
-        final JavaRDD<GATKRead> rawReads = bwaEngine.align(fastqRecords);
+        final JavaRDD<GATKRead> rawReads = bwaEngine.align(fastqRecords).setName("rawReads");
 
         rawReads.persist(persistSerialized ? org.apache.spark.api.java.StorageLevels.MEMORY_AND_DISK_SER : org.apache.spark.api.java.StorageLevels.MEMORY_AND_DISK);
 
-        final JavaRDD<GATKRead> initialReads = rawReads.filter(read -> wellformedReadFilter.test(read));
+        final JavaRDD<GATKRead> initialReads = rawReads.filter(read -> wellformedReadFilter.test(read)).setName("initialReads");
 
         if (joinStrategy == JoinStrategy.BROADCAST && ! getReference().isCompatibleWithSparkBroadcast()){
             throw new UserException.Require2BitReferenceForBroadcast();
         }
 
         // mark duplicates
-        final JavaRDD<GATKRead> markedReadsWithOD = MarkDuplicatesSpark.mark(initialReads, getHeaderForReads(), duplicatesScoringStrategy, new OpticalDuplicateFinder(), getRecommendedNumReducers());
-        final JavaRDD<GATKRead> markedReads = MarkDuplicatesSpark.cleanupTemporaryAttributes(markedReadsWithOD);
+        final JavaRDD<GATKRead> markedReadsWithOD = MarkDuplicatesSpark.mark(initialReads, getHeaderForReads(), duplicatesScoringStrategy, new OpticalDuplicateFinder(), getRecommendedNumReducers()).setName("markedReadsWithOD");
+        final JavaRDD<GATKRead> markedReads = MarkDuplicatesSpark.cleanupTemporaryAttributes(markedReadsWithOD).setName("markedReads");
         if(persistMarkedReads)
         {
             markedReads.persist(persistSerialized ? org.apache.spark.api.java.StorageLevels.MEMORY_AND_DISK_SER : org.apache.spark.api.java.StorageLevels.MEMORY_AND_DISK);
@@ -282,7 +282,7 @@ public class ReadsPipelineSpark extends GATKSparkTool {
         //NOTE: this doesn't honor enabled/disabled commandline filters
         final ReadFilter bqsrReadFilter = ReadFilter.fromList(BaseRecalibrator.getBQSRSpecificReadFilterList(), getHeaderForReads());
 
-        JavaRDD<GATKRead> markedFilteredReadsForBQSR = markedReads.filter(read -> bqsrReadFilter.test(read));
+        JavaRDD<GATKRead> markedFilteredReadsForBQSR = markedReads.filter(read -> bqsrReadFilter.test(read)).setName("markedFilteredReadsForBQSR");
 
         if (joinStrategy.equals(JoinStrategy.OVERLAPS_PARTITIONER)) {
             // the overlaps partitioner requires that reads are coordinate-sorted
@@ -292,9 +292,9 @@ public class ReadsPipelineSpark extends GATKSparkTool {
         }
 
         final VariantsSparkSource variantsSparkSource = new VariantsSparkSource(ctx);
-        final JavaRDD<GATKVariant> bqsrKnownVariants = variantsSparkSource.getParallelVariants(baseRecalibrationKnownVariants, getIntervals());
+        final JavaRDD<GATKVariant> bqsrKnownVariants = variantsSparkSource.getParallelVariants(baseRecalibrationKnownVariants, getIntervals()).setName("bqsrKnownVariants");
 
-        final JavaPairRDD<GATKRead, ReadContextData> rddReadContext = AddContextDataToReadSpark.add(ctx, markedFilteredReadsForBQSR, getReference(), bqsrKnownVariants, baseRecalibrationKnownVariants, joinStrategy, getHeaderForReads().getSequenceDictionary(), readShardSize, readShardPadding);
+        final JavaPairRDD<GATKRead, ReadContextData> rddReadContext = AddContextDataToReadSpark.add(ctx, markedFilteredReadsForBQSR, getReference(), bqsrKnownVariants, baseRecalibrationKnownVariants, joinStrategy, getHeaderForReads().getSequenceDictionary(), readShardSize, readShardPadding).setName("rddReadContext");
         final RecalibrationReport bqsrReport = BaseRecalibratorSparkFn.apply(rddReadContext, getHeaderForReads(), getReferenceSequenceDictionary(), bqsrArgs);
 
         // there is a treeAggregate up there, if we are to unpersist rawReads, this is the time
@@ -304,14 +304,14 @@ public class ReadsPipelineSpark extends GATKSparkTool {
         }
 
         final Broadcast<RecalibrationReport> reportBroadcast = ctx.broadcast(bqsrReport);
-        final JavaRDD<GATKRead> calibratedReads = ApplyBQSRSparkFn.apply(markedReads, reportBroadcast, getHeaderForReads(), applyBqsrArgs.toApplyBQSRArgumentCollection(bqsrArgs.PRESERVE_QSCORES_LESS_THAN));
+        final JavaRDD<GATKRead> calibratedReads = ApplyBQSRSparkFn.apply(markedReads, reportBroadcast, getHeaderForReads(), applyBqsrArgs.toApplyBQSRArgumentCollection(bqsrArgs.PRESERVE_QSCORES_LESS_THAN)).setName("calibratedReads");
 
         final List<SimpleInterval> intervals = hasIntervals() ? getIntervals() : IntervalUtils.getAllIntervalsForReference(getHeaderForReads().getSequenceDictionary());
         final ReadFilter haplotypeCallerFilter = (new GATKReadFilterPluginDescriptor(HaplotypeCallerEngine.makeStandardHCReadFilters())).getMergedReadFilter(getHeaderForReads());
-        final JavaRDD<GATKRead> filteredReads = calibratedReads.filter(read -> haplotypeCallerFilter.test(read));
+        final JavaRDD<GATKRead> filteredReads = calibratedReads.filter(read -> haplotypeCallerFilter.test(read)).setName("filteredReads");
 
         // hyplotype caller
-        final JavaRDD<VariantContext> variants = callVariantsWithHaplotypeCaller(getAuthHolder(), ctx, filteredReads, getHeaderForReads(), getReference(), intervals, hcArgs, shardingArgs);
+        final JavaRDD<VariantContext> variants = callVariantsWithHaplotypeCaller(getAuthHolder(), ctx, filteredReads, getHeaderForReads(), getReference(), intervals, hcArgs, shardingArgs).setName("variants");
         if (hcArgs.emitReferenceConfidence == ReferenceConfidenceMode.GVCF) {
             // VariantsSparkSink/Hadoop-BAM VCFOutputFormat do not support writing GVCF, see https://github.com/broadinstitute/gatk/issues/2738
             writeVariants(variants);
