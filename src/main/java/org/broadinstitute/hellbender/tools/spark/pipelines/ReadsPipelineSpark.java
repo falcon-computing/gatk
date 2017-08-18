@@ -46,6 +46,7 @@ import org.broadinstitute.hellbender.tools.spark.transforms.ApplyBQSRSparkFn;
 import org.broadinstitute.hellbender.tools.spark.transforms.BaseRecalibratorSparkFn;
 import org.broadinstitute.hellbender.tools.spark.transforms.markduplicates.MarkDuplicatesSpark;
 import org.broadinstitute.hellbender.tools.spark.bwa.NativeBwaSparkEngine;
+import org.broadinstitute.hellbender.tools.spark.bwa.NativeSplitFastqSparkEngine;
 import org.broadinstitute.hellbender.tools.walkers.bqsr.BaseRecalibrator;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.HaplotypeCaller;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.HaplotypeCallerArgumentCollection;
@@ -104,25 +105,38 @@ public class ReadsPipelineSpark extends GATKSparkTool {
     @Argument(doc = "the known variants", shortName = "knownSites", fullName = "knownSites", optional = false)
     protected List<String> baseRecalibrationKnownVariants;
 
-    @Argument(doc = "input [gzipped] fastq file prefix", fullName = "inputFastq1")
+    @Argument(doc = "input [gzipped] fastq file", fullName = "inputFastq1")
     protected String inputFastq1 = null;
 
-    @Argument(doc = "another input [gzipped] fastq file prefix", fullName = "inputFastq2", optional = true)
+    @Argument(doc = "paired input [gzipped] fastq file", fullName = "inputFastq2", optional = true)
     protected String inputFastq2 = null;
+
+    @Argument(doc = "input splitted [gzipped] fastq file prefix", fullName = "inputSplittedFastq1", optional = true)
+    protected String inputSplittedFastq1 = null;
+
+    @Argument(doc = "paired input splitted [gzipped] fastq file prefix", fullName = "inputSplittedFastq2", optional = true)
+    protected String inputSplittedFastq2 = null;
+
+    @Argument(doc = "whether to keep splitted fastq files", fullName = "keepFastqSplit", optional = true)
+    protected boolean keepFastqSplit = false;
 
     @Argument(doc = "whether to persist markedReads", fullName = "persistMarkedReads", optional = true)
     protected boolean persistMarkedReads = false;
 
     @Argument(doc = "whether to persist in serialized form", fullName = "persistSerialized", optional = true)
-    protected boolean persistSerialized= true;
+    protected boolean persistSerialized = true;
 
-    /* This argument helps to calculate the start_idx parameter. If not set,
-     * start_idx will always be zero. At this time, there is no check on
-     * whether this argument is consistent with the split size. Wrong value
-     * will result in wrong start_idx number.
-     */
+    @Argument(doc = "whether to split fastq on driver", fullName = "splitFastqOnDriver", optional = true)
+    protected boolean splitFastqOnDriver= false;
+
     @Argument(doc = "number of read [pairs] in each fastq split", fullName = "fastqSplitSize", optional = true)
     protected long fastqSplitSize = 0L;
+
+    @Argument(doc = "fastq split compression level", fullName = "fastqSplitCompressionLevel", optional = true)
+    protected int fastqSplitCompressionLevel = 1;
+
+    @Argument(doc = "fastq split file replication", fullName = "fastSplitReplication", optional = true)
+    protected int fastqSplitReplication = 3;
 
     @Argument(doc = "Complete read group header line. ’\t’ can be used in STR and will be converted to a TAB in the output SAM. The read group ID will be attached to every read in the output. An example is ’@RG\tID:foo\tSM:bar’.", fullName = "readGroupHeaderLine", optional = true)
     protected String readGroupHeaderLine = null;
@@ -216,41 +230,83 @@ public class ReadsPipelineSpark extends GATKSparkTool {
     @Override
     protected void runTool(final JavaSparkContext ctx) {
         // read fastq inputs
-        List<Tuple3<String, String, Long> > fastqRecordList = new ArrayList<Tuple3<String, String, Long> >();
-        Set<Integer> fileSet = new HashSet<Integer>();
+        JavaRDD<Tuple3<String, String, Long> > fastqRecords = null;
         try {
+            // run split-fastq if necessary
             FileSystem fs = FileSystem.get(new URI(inputFastq1), new Configuration(true));
-            FileStatus[] inputFastq1Files = fs.globStatus(new Path(new URI(inputFastq1+".part*")));
-            if(inputFastq1Files.length==0) {
-                // TODO: try to do the split
-                throw new UserException("Cannot find file: "+inputFastq1+".part*");
+            boolean doSplit = false;
+            if(inputSplittedFastq1==null) {
+                if(fs.exists(new Path(new URI(inputFastq1)))) {
+                    inputSplittedFastq1 = inputFastq1;
+                    inputSplittedFastq2 = inputFastq2;
+                    doSplit = true;
+                } else {
+                    throw new UserException("Cannot find file: "+inputFastq1);
+                }
+            } else {
+                FileSystem split_fs = FileSystem.get(new URI(inputSplittedFastq1), new Configuration(true));
+                FileStatus[] inputSplittedFastq1Files = split_fs.globStatus(new Path(new URI(inputSplittedFastq1+".part*")));
+                if(inputSplittedFastq1Files.length>0) {
+                    // read directly without splitting, ignore inputFastq1
+                    List<Tuple3<String, String, Long> > fastqRecordList = new ArrayList<Tuple3<String, String, Long> >();
+                    Set<Integer> fileSet = new HashSet<Integer>();
+                    for(FileStatus file:inputSplittedFastq1Files)
+                    {
+                        String pathString = file.getPath().toString();
+                        fileSet.add(Integer.parseInt(pathString.substring(pathString.lastIndexOf(".part")+5)));
+                    }
+                    // stop if there is a gap
+                    for(int i = 0;; ++i)
+                    {
+                        if(fileSet.contains(new Integer(i)))
+                        {
+                            fastqRecordList.add(
+                                new Tuple3<String, String, Long>(inputSplittedFastq1+".part"+i, inputSplittedFastq2!=null ? inputSplittedFastq2+".part"+i : null, new Long((long)i*fastqSplitSize))
+                            );
+                        } else {
+                            numReducers = i;
+                            break;
+                        }
+                    }
+
+                    fastqRecords = ctx.parallelize(fastqRecordList, fastqRecordList.size());
+                    fastqRecords.setName("fastqRecords").cache();
+                } else {
+                    if(fs.exists(new Path(new URI(inputFastq1)))) {
+                        doSplit = true;
+                    } else {
+                        throw new UserException("Cannot find file: "+inputFastq1);
+                    }
+                }
             }
-            for(FileStatus file:inputFastq1Files)
-            {
-                String pathString = file.getPath().toString();
-                fileSet.add(Integer.parseInt(pathString.substring(pathString.lastIndexOf(".part")+5)));
+
+            if(doSplit) {
+                if(fastqSplitSize==0) {
+                    fastqSplitSize = 100000L;
+                }
+                Tuple2<String[], long[]> fastqSplitParams = new Tuple2<String[], long[]>(
+                    new String[]{inputFastq1, inputSplittedFastq1,
+                                 inputFastq2, inputSplittedFastq2},
+                    new long[]{fastqSplitSize, fastqSplitReplication, fastqSplitCompressionLevel});
+                if(splitFastqOnDriver) {
+                    List<Tuple3<String, String, Long> > fastqRecordList = NativeSplitFastqSparkEngine.doSplit(fastqSplitParams);
+                    fastqRecords = ctx.parallelize(fastqRecordList, fastqRecordList.size());
+                    fastqRecords.setName("fastqRecords").cache();
+                } else {
+                    List<Tuple2<String[], long[]> > fastqSplitParamsList =
+                        new ArrayList<Tuple2<String[], long[]> >(1);
+                    fastqSplitParamsList.add(fastqSplitParams);
+                    fastqRecords = NativeSplitFastqSparkEngine.split(ctx.parallelize(fastqSplitParamsList, 1));
+                    fastqRecords.setName("fastqRecords").cache();
+                    fastqRecords = fastqRecords.repartition((int)fastqRecords.count());
+                    fastqRecords.setName("fastqRecords");
+                }
             }
         } catch (IOException e) {
             throw new UserException("Cannot open file: "+e.getMessage());
         } catch (URISyntaxException e) {
             throw new UserException("URI syntax error: "+e.getMessage());
         }
-
-        // stop if there is a gap
-        for(int i = 0;; ++i)
-        {
-            if(fileSet.contains(new Integer(i)))
-            {
-                fastqRecordList.add(
-                    new Tuple3<String, String, Long>(inputFastq1+".part"+i, inputFastq2!=null ? inputFastq2+".part"+i : null, new Long((long)i*fastqSplitSize))
-                );
-            } else {
-                numReducers = i;
-                break;
-            }
-        }
-
-        JavaRDD<Tuple3<String, String, Long> > fastqRecords = ctx.parallelize(fastqRecordList, fastqRecordList.size());
 
         // bwa
         final NativeBwaSparkEngine bwaEngine = new NativeBwaSparkEngine(indexImageFile, readGroupHeaderLine);
@@ -322,6 +378,22 @@ public class ReadsPipelineSpark extends GATKSparkTool {
                 VariantsSparkSink.writeVariants(ctx, output, variants, hcEngine.makeVCFHeader(getHeaderForReads().getSequenceDictionary(), new HashSet<>()));
             } catch (IOException e) {
                 throw new UserException.CouldNotCreateOutputFile(output, "writing failed", e);
+            }
+        }
+
+        if(!keepFastqSplit) {
+            try {
+                FileSystem split_fs = FileSystem.get(new URI(inputSplittedFastq1), new Configuration(true));
+                fastqRecords.foreach(e -> {
+                    split_fs.delete(new Path(new URI(e._1())), false);
+                    if(e._2()!=null) {
+                        split_fs.delete(new Path(new URI(e._2())), false);
+                    }
+                });
+            } catch (IOException e) {
+                throw new UserException("Cannot open file: "+e.getMessage());
+            } catch (URISyntaxException e) {
+                throw new UserException("URI syntax error: "+e.getMessage());
             }
         }
     }

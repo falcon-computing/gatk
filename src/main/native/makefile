@@ -27,9 +27,13 @@ HTSLIB_PATH ?= htslib
 CXXOPTS_PATH ?= cxxopts
 HADOOP_PATH ?= hadoop
 
+SPLIT_JNI_ENTRY_CLASS = org.broadinstitute.hellbender.tools.spark.bwa.NativeSplitFastqSparkEngine
+SPLIT_JNI_ENTRY = $(subst .,_,$(SPLIT_JNI_ENTRY_CLASS))
+SPLIT_LIB_NAME = splitfastq
+
 .PHONY: all, clean
 
-all: lib/lib$(BWA_LIB_NAME).so bin/split-fastq
+all: lib/lib$(BWA_LIB_NAME).so lib/lib$(SPLIT_LIB_NAME).so bin/split-fastq
 
 clean:
 	$(MAKE) -C $(BWA_PATH) $@
@@ -38,6 +42,8 @@ clean:
 # srcs
 src/$(BWA_JNI_ENTRY).h:
 	javah -cp ../../../build/install/gatk/lib/\* -d $(@D) $(BWA_JNI_ENTRY_CLASS)
+src/$(SPLIT_JNI_ENTRY).h:
+	javah -cp ../../../build/install/gatk/lib/\* -d $(@D) $(SPLIT_JNI_ENTRY_CLASS)
 
 # objs
 obj/split-fastq.o: src/split-fastq.cpp
@@ -59,6 +65,10 @@ obj/preprocess.o: $(BWA_FLOW_PATH)/src/preprocess.cpp
 
 -include obj/preprocess.d
 
+obj/$(SPLIT_JNI_ENTRY).o: src/$(SPLIT_JNI_ENTRY).cpp src/$(SPLIT_JNI_ENTRY).h
+	@mkdir -p $(@D)
+	$(CXX) -c $(CXXFLAGS) $(JNI_FLAGS) $(HDFS_FLAGS) $< -o $@
+
 # libs
 lib/lib$(BWA_LIB_NAME).so: obj/$(BWA_JNI_ENTRY).o obj/preprocess.o $(BWA_PATH)/libbwa.a
 	@mkdir -p $(@D)
@@ -66,6 +76,10 @@ lib/lib$(BWA_LIB_NAME).so: obj/$(BWA_JNI_ENTRY).o obj/preprocess.o $(BWA_PATH)/l
 
 $(BWA_PATH)/libbwa.a:
 	$(MAKE) -C $(BWA_PATH) libbwa.a
+
+lib/lib$(SPLIT_LIB_NAME).so: obj/$(SPLIT_JNI_ENTRY).o obj/split-fastq.o
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $(HDFS_LDFLAGS) $(JNI_LDFLAGS) $(ZLIB_LDFLAGS) -shared $^ -o $@
 
 # bins
 bin/split-fastq: obj/split-fastq.o obj/split-fastq-main.o
