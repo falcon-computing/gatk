@@ -417,8 +417,8 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
  */
 JNIEXPORT void JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_initNativeAlign(JNIEnv* env, jobject obj)
 {
-    aux_mutex.lock();
     total_jni_threads++;
+    aux_mutex.lock();
     if(aux!=nullptr)
     {
         clog<<"libgatkbwa:INFO Native resources already initialized\n";
