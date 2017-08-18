@@ -299,7 +299,7 @@ public class ReadsPipelineSpark extends GATKSparkTool {
                     fastqRecords = NativeSplitFastqSparkEngine.split(ctx.parallelize(fastqSplitParamsList, 1));
                     fastqRecords.setName("fastqRecords").cache();
                     fastqRecords = fastqRecords.repartition((int)fastqRecords.count());
-                    fastqRecords.setName("fastqRecords");
+                    fastqRecords.setName("fastqRecords").cache();
                 }
             }
         } catch (IOException e) {
