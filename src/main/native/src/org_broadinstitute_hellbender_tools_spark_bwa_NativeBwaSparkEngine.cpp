@@ -509,12 +509,18 @@ JNIEXPORT void JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Native
     dup2(out_pipe[1], STDOUT_FILENO);
     close(out_pipe[1]);
 
-    pre_process(bwa_args.size(), (char**)&bwa_args[0], aux, true);
+    int preproc_rc = pre_process(bwa_args.size(), (char**)&bwa_args[0], aux, true);
     fflush(stdout);
 
     read(out_pipe[0], header_string, header_string_max_len);
     close(out_pipe[0]);
     dup2(saved_stdout_fd, STDOUT_FILENO);
+    if(preproc_rc!=0)
+    {
+        clog<<"libgatkbwa:ERROR Cannot parse bwa options\n";
+        aux_mutex.unlock();
+        return;
+    }
     jstring header_jstring = env->NewStringUTF(header_string);
     env->SetObjectField(obj, org_broadinstitute_hellbender_tools_spark_bwa_NativeBwaSparkEngine_headerString_, header_jstring);
     delete[] header_string;
