@@ -312,6 +312,7 @@ public class ReadsPipelineSpark extends GATKSparkTool {
                     fastqRecords.setName("fastqRecords").cache();
                     int numSplit = (int)fastqRecords.count();
                     fastqRecords = fastqRecords.repartition(numSplit);
+                    fastqRecords.count();
                     fastqRecords.setName("fastqRecords").cache();
                 }
                 if(numReducers==0) {
