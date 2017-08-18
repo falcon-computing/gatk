@@ -135,7 +135,7 @@ public class ReadsPipelineSpark extends GATKSparkTool {
     @Argument(doc = "fastq split compression level", fullName = "fastqSplitCompressionLevel", optional = true)
     protected int fastqSplitCompressionLevel = 1;
 
-    @Argument(doc = "fastq split file replication", fullName = "fastSplitReplication", optional = true)
+    @Argument(doc = "fastq split file replication", fullName = "fastqSplitReplication", optional = true)
     protected int fastqSplitReplication = 3;
 
     @Argument(doc = "Complete read group header line. ’\t’ can be used in STR and will be converted to a TAB in the output SAM. The read group ID will be attached to every read in the output. An example is ’@RG\tID:foo\tSM:bar’.", fullName = "readGroupHeaderLine", optional = true)
