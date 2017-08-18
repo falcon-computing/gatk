@@ -384,12 +384,12 @@ public class ReadsPipelineSpark extends GATKSparkTool {
         if(!keepFastqSplit) {
             try {
                 FileSystem split_fs = FileSystem.get(new URI(inputSplittedFastq1), new Configuration(true));
-                fastqRecords.foreach(e -> {
+                for(Tuple3<String, String, Long> e: fastqRecords.collect()) {
                     split_fs.delete(new Path(new URI(e._1())), false);
                     if(e._2()!=null) {
                         split_fs.delete(new Path(new URI(e._2())), false);
                     }
-                });
+                }
             } catch (IOException e) {
                 throw new UserException("Cannot open file: "+e.getMessage());
             } catch (URISyntaxException e) {
