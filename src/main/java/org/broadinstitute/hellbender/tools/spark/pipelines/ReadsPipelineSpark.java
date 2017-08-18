@@ -138,6 +138,9 @@ public class ReadsPipelineSpark extends GATKSparkTool {
     @Argument(doc = "fastq split file replication", fullName = "fastqSplitReplication", optional = true)
     protected int fastqSplitReplication = 3;
 
+    @Argument(doc = "force generate fastq splits", fullName = "forceSplitFastq", optional = true)
+    protected boolean forceSplitFastq = false;
+
     @Argument(doc = "Complete read group header line. ’\t’ can be used in STR and will be converted to a TAB in the output SAM. The read group ID will be attached to every read in the output. An example is ’@RG\tID:foo\tSM:bar’.", fullName = "readGroupHeaderLine", optional = true)
     protected String readGroupHeaderLine = null;
 
@@ -235,47 +238,51 @@ public class ReadsPipelineSpark extends GATKSparkTool {
             // run split-fastq if necessary
             FileSystem fs = FileSystem.get(new URI(inputFastq1), new Configuration(true));
             boolean doSplit = false;
-            if(inputSplittedFastq1==null) {
-                if(fs.exists(new Path(new URI(inputFastq1)))) {
-                    inputSplittedFastq1 = inputFastq1;
-                    inputSplittedFastq2 = inputFastq2;
-                    doSplit = true;
-                } else {
-                    throw new UserException("Cannot find file: "+inputFastq1);
-                }
+            if(forceSplitFastq) {
+                doSplit = true;
             } else {
-                FileSystem split_fs = FileSystem.get(new URI(inputSplittedFastq1), new Configuration(true));
-                FileStatus[] inputSplittedFastq1Files = split_fs.globStatus(new Path(new URI(inputSplittedFastq1+".part*")));
-                if(inputSplittedFastq1Files.length>0) {
-                    // read directly without splitting, ignore inputFastq1
-                    List<Tuple3<String, String, Long> > fastqRecordList = new ArrayList<Tuple3<String, String, Long> >();
-                    Set<Integer> fileSet = new HashSet<Integer>();
-                    for(FileStatus file:inputSplittedFastq1Files)
-                    {
-                        String pathString = file.getPath().toString();
-                        fileSet.add(Integer.parseInt(pathString.substring(pathString.lastIndexOf(".part")+5)));
-                    }
-                    // stop if there is a gap
-                    for(int i = 0;; ++i)
-                    {
-                        if(fileSet.contains(new Integer(i)))
-                        {
-                            fastqRecordList.add(
-                                new Tuple3<String, String, Long>(inputSplittedFastq1+".part"+i, inputSplittedFastq2!=null ? inputSplittedFastq2+".part"+i : null, new Long((long)i*fastqSplitSize))
-                            );
-                        } else {
-                            numReducers = i;
-                            break;
-                        }
-                    }
-
-                    fastqRecords = ctx.parallelize(fastqRecordList, fastqRecordList.size());
-                    fastqRecords.setName("fastqRecords").cache();
-                } else {
+                if(inputSplittedFastq1==null) {
                     if(fs.exists(new Path(new URI(inputFastq1)))) {
+                        inputSplittedFastq1 = inputFastq1;
+                        inputSplittedFastq2 = inputFastq2;
                         doSplit = true;
                     } else {
                         throw new UserException("Cannot find file: "+inputFastq1);
+                    }
+                } else {
+                    FileSystem split_fs = FileSystem.get(new URI(inputSplittedFastq1), new Configuration(true));
+                    FileStatus[] inputSplittedFastq1Files = split_fs.globStatus(new Path(new URI(inputSplittedFastq1+".part*")));
+                    if(inputSplittedFastq1Files.length>0) {
+                        // read directly without splitting, ignore inputFastq1
+                        List<Tuple3<String, String, Long> > fastqRecordList = new ArrayList<Tuple3<String, String, Long> >();
+                        Set<Integer> fileSet = new HashSet<Integer>();
+                        for(FileStatus file:inputSplittedFastq1Files)
+                        {
+                            String pathString = file.getPath().toString();
+                            fileSet.add(Integer.parseInt(pathString.substring(pathString.lastIndexOf(".part")+5)));
+                        }
+                        // stop if there is a gap
+                        for(int i = 0;; ++i)
+                        {
+                            if(fileSet.contains(new Integer(i)))
+                            {
+                                fastqRecordList.add(
+                                    new Tuple3<String, String, Long>(inputSplittedFastq1+".part"+i, inputSplittedFastq2!=null ? inputSplittedFastq2+".part"+i : null, new Long((long)i*fastqSplitSize))
+                                );
+                            } else {
+                                numReducers = i;
+                                break;
+                            }
+                        }
+
+                        fastqRecords = ctx.parallelize(fastqRecordList, fastqRecordList.size());
+                        fastqRecords.setName("fastqRecords").cache();
+                    } else {
+                        if(fs.exists(new Path(new URI(inputFastq1)))) {
+                            doSplit = true;
+                        } else {
+                            throw new UserException("Cannot find file: "+inputFastq1);
+                        }
                     }
                 }
             }
