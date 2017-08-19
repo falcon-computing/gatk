@@ -276,7 +276,8 @@ JNIEXPORT jobject JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Nat
         }
     }
 
-    jobject bam_record_list = env->NewObject(java_util_ArrayList, java_util_ArrayList_, 1<<16); // TODO: better guess on init capacity
+    // 1.5x read_count, avoid re-allocation if there is less than 1.5x read_count result
+    jobject bam_record_list = env->NewObject(java_util_ArrayList, java_util_ArrayList_, read_count+read_count/2);
 
     bool all_right = true;
 
