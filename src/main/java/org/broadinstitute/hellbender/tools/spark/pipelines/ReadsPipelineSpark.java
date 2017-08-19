@@ -279,9 +279,8 @@ public class ReadsPipelineSpark extends GATKSparkTool {
                                 break;
                             }
                         }
-
                         fastqRecords = ctx.parallelize(fastqRecordList, fastqRecordList.size());
-                        fastqRecords.setName("fastqRecords").cache();
+                        fastqRecords.setName("fastqRecords");
                     } else {
                         if(fs.exists(new Path(new URI(inputFastq1)))) {
                             doSplit = true;
@@ -300,21 +299,17 @@ public class ReadsPipelineSpark extends GATKSparkTool {
                     new String[]{inputFastq1, inputSplittedFastq1,
                                  inputFastq2, inputSplittedFastq2},
                     new long[]{fastqSplitSize, fastqSplitReplication, fastqSplitCompressionLevel});
+                List<Tuple3<String, String, Long> > fastqRecordList;
                 if(splitFastqOnDriver) {
-                    List<Tuple3<String, String, Long> > fastqRecordList = NativeSplitFastqSparkEngine.doSplit(fastqSplitParams);
-                    fastqRecords = ctx.parallelize(fastqRecordList, fastqRecordList.size());
-                    fastqRecords.setName("fastqRecords").cache();
+                    fastqRecordList = NativeSplitFastqSparkEngine.doSplit(fastqSplitParams);
                 } else {
                     List<Tuple2<String[], long[]> > fastqSplitParamsList =
                         new ArrayList<Tuple2<String[], long[]> >(1);
                     fastqSplitParamsList.add(fastqSplitParams);
-                    fastqRecords = NativeSplitFastqSparkEngine.split(ctx.parallelize(fastqSplitParamsList, 1));
-                    fastqRecords.setName("fastqRecords").cache();
-                    int numSplit = (int)fastqRecords.count();
-                    fastqRecords = fastqRecords.repartition(numSplit);
-                    fastqRecords.count();
-                    fastqRecords.setName("fastqRecords").cache();
+                    fastqRecordList = NativeSplitFastqSparkEngine.split(ctx.parallelize(fastqSplitParamsList, 1)).collect();
                 }
+                fastqRecords = ctx.parallelize(fastqRecordList, fastqRecordList.size());
+                fastqRecords.setName("fastqRecords");
                 if(numReducers==0) {
                     numReducers = fastqRecords.getNumPartitions();
                 }
