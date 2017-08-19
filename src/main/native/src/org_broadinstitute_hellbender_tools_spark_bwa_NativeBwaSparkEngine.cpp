@@ -604,6 +604,7 @@ JNIEXPORT void JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Native
     }
     clog<<"libgatkbwa:INFO Release native resources\n";
 
+    // hdfs_fs1 and hdfs_fs2 are protected by aux_mutex
     if(hdfs_fs1!=nullptr)
     {
         hdfsDisconnect(hdfs_fs1);
@@ -612,6 +613,8 @@ JNIEXPORT void JNICALL Java_org_broadinstitute_hellbender_tools_spark_bwa_Native
     {
         hdfsDisconnect(hdfs_fs2);
     }
+    hdfs_fs1 = nullptr;
+    hdfs_fs2 = nullptr;
 
     free(aux->opt);
     bwa_idx_destroy(aux->idx);
