@@ -17,13 +17,13 @@
 
 using namespace std;
 
-static void GetBatch(FILE* input, vector<tuple<char*, size_t> >* output, size_t* line_count_ptr)
+static void GetBatch(FILE* input, size_t kBatchSize, vector<tuple<char*, size_t> >* output, size_t* line_count_ptr, int* seq_length)
 {
     // output.size() is kBatchSize*4 
     size_t line_count = 0;
-    for(auto& read: *output)
+    for(auto read = output->begin(); read < output->begin()+2; ++read)
     {
-        char* ptr = get<0>(read);
+        char* ptr = get<0>(*read);
         size_t n = 0;
         ssize_t read_bytes = getline(&ptr, &n, input);
         if(read_bytes <= 0)
@@ -35,8 +35,34 @@ static void GetBatch(FILE* input, vector<tuple<char*, size_t> >* output, size_t*
             }
             break;
         }
-        get<0>(read) = ptr;
-        get<1>(read) = read_bytes;
+        get<0>(*read) = ptr;
+        get<1>(*read) = read_bytes;
+        ++line_count;
+        if(*seq_length==0 && line_count==2)
+        {
+            *seq_length = read_bytes-1;
+        }
+    }
+    if(output->size() != kBatchSize/(*seq_length)*4)
+    {
+        output->resize(kBatchSize/(*seq_length)*4);
+    }
+    for(auto read = output->begin()+2; read < output->end(); ++read)
+    {
+        char* ptr = get<0>(*read);
+        size_t n = 0;
+        ssize_t read_bytes = getline(&ptr, &n, input);
+        if(read_bytes <= 0)
+        {
+            if(!feof(input))
+            {
+                clog<<"ERROR: Cannot read file: "<<strerror(errno)<<endl;
+                exit(2);
+            }
+            break;
+        }
+        get<0>(*read) = ptr;
+        get<1>(*read) = read_bytes;
         ++line_count;
     }
     if((line_count & 0x3) != 0)
@@ -141,7 +167,7 @@ static void ReadHDFS(hdfsFS hdfs_fs, hdfsFile hdfs_file, int write_fd)
     delete[] buffer;
 }
 
-int SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& kInputFastq1, const string& kOutputFastq1, const string& kInputFastq2, const string& kOutputFastq2, const int kHDFSBufferSize = 0, const short kHDFSReplication = 0, const size_t kHDFSBlockSize = 0, const int8_t kCompressionLevel = 1)
+int SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, int* seq_length, const string& kInputFastq1, const string& kOutputFastq1, const string& kInputFastq2, const string& kOutputFastq2, const int kHDFSBufferSize = 0, const short kHDFSReplication = 0, const size_t kHDFSBlockSize = 0, const int8_t kCompressionLevel = 1)
 {
     // initialize hdfs
     const string kHDFSProto = "hdfs://";
@@ -403,16 +429,18 @@ int SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& kI
     }
 
     int batch_id = 0;
+    int seq_length1 = 0;
+    int seq_length2 = 0;
     for(;;++batch_id)
     {
         size_t line_count1 = 0;
         size_t line_count2 = 0;
-        output1 = new vector<tuple<char*, size_t> >(kBatchSize*4);
+        output1 = new vector<tuple<char*, size_t> >(seq_length1==0 ? 2 : kBatchSize/seq_length1*4);
         if(kIsPaired)
         {
-            output2 = new vector<tuple<char*, size_t> >(kBatchSize*4);
-            thread thread1 = thread(GetBatch, input1, output1, &line_count1);
-            thread thread2 = thread(GetBatch, input2, output2, &line_count2);
+            output2 = new vector<tuple<char*, size_t> >(seq_length2==0 ? 2 : kBatchSize/seq_length2*4);
+            thread thread1 = thread(GetBatch, input1, kBatchSize, output1, &line_count1, &seq_length1);
+            thread thread2 = thread(GetBatch, input2, kBatchSize, output2, &line_count2, &seq_length2);
             thread1.join();
             thread2.join();
             if(line_count1!=line_count2)
@@ -423,7 +451,7 @@ int SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& kI
         }
         else
         {
-            GetBatch(input1, output1, &line_count1);
+            GetBatch(input1, kBatchSize, output1, &line_count1, &seq_length1);
         }
         if(line_count1==0)
         {
@@ -489,6 +517,15 @@ int SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& kI
     }
 
     int num_splits = batch_id;
+    if(seq_length1!=seq_length2)
+    {
+        clog<<"ERROR: Two input fastq files do not match"<<endl;
+        exit(1);
+    }
+    if(seq_length!=nullptr)
+    {
+        *seq_length = seq_length1;
+    }
 
     // delete extra files
     for(;;++batch_id)

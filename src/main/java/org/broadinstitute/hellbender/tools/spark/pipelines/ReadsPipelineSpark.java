@@ -129,7 +129,7 @@ public class ReadsPipelineSpark extends GATKSparkTool {
     @Argument(doc = "whether to split fastq on driver", fullName = "splitFastqOnDriver", optional = true)
     protected boolean splitFastqOnDriver= false;
 
-    @Argument(doc = "number of read [pairs] in each fastq split", fullName = "fastqSplitSize", optional = true)
+    @Argument(doc = "number of bases in each fastq split", fullName = "fastqSplitSize", optional = true)
     protected long fastqSplitSize = 0L;
 
     @Argument(doc = "fastq split compression level", fullName = "fastqSplitCompressionLevel", optional = true)
@@ -264,13 +264,21 @@ public class ReadsPipelineSpark extends GATKSparkTool {
                             String pathString = file.getPath().toString();
                             fileSet.add(Integer.parseInt(pathString.substring(pathString.lastIndexOf(".part")+5)));
                         }
+
+                        long fastqSplitSizeInSeq = fastqSplitSize;
+                        if(fastqSplitSize>0)
+                        {
+                            List<String> sampleFastq = ctx.textFile(inputSplittedFastq1+".part0").take(2);
+                            fastqSplitSizeInSeq /= sampleFastq.get(1).length() - 1;
+                        }
+
                         // stop if there is a gap
                         for(int i = 0;; ++i)
                         {
                             if(fileSet.contains(new Integer(i)))
                             {
                                 fastqRecordList.add(
-                                    new Tuple3<String, String, Long>(inputSplittedFastq1+".part"+i, inputSplittedFastq2!=null ? inputSplittedFastq2+".part"+i : null, new Long((long)i*fastqSplitSize))
+                                    new Tuple3<String, String, Long>(inputSplittedFastq1+".part"+i, inputSplittedFastq2!=null ? inputSplittedFastq2+".part"+i : null, new Long((long)i*(fastqSplitSizeInSeq)))
                                 );
                             } else {
                                 if(numReducers==0) {
@@ -293,7 +301,7 @@ public class ReadsPipelineSpark extends GATKSparkTool {
 
             if(doSplit) {
                 if(fastqSplitSize==0) {
-                    fastqSplitSize = 100000L;
+                    fastqSplitSize = 10000000L;
                 }
                 Tuple2<String[], long[]> fastqSplitParams = new Tuple2<String[], long[]>(
                     new String[]{inputFastq1, inputSplittedFastq1,

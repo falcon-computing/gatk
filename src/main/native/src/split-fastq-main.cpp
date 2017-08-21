@@ -5,7 +5,7 @@
 
 using namespace std;
 
-int SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& kInputFastq1, const string& kOutputFastq1, const string& kInputFastq2, const string& kOutputFastq2, const int kHDFSBufferSize = 0, const short kHDFSReplication = 0, const size_t kHDFSBlockSize = 0, const int8_t kCompressionLevel = 1);
+int SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, int* seq_length, const string& kInputFastq1, const string& kOutputFastq1, const string& kInputFastq2, const string& kOutputFastq2, const int kHDFSBufferSize = 0, const short kHDFSReplication = 0, const size_t kHDFSBlockSize = 0, const int8_t kCompressionLevel = 1);
 
 int main(int argc, char* argv[])
 {
@@ -13,7 +13,7 @@ int main(int argc, char* argv[])
     options.add_options()
         ("v,verbose", "Enable verbose logging")
         ("h,help", "Print this help message")
-        ("s,batch-size", "Number of reads per batch", cxxopts::value<size_t>()->default_value("100000"))
+        ("s,batch-size", "Number of reads per batch", cxxopts::value<size_t>()->default_value("10000000"))
         ("i,input-fastq", "Input fastq file name", cxxopts::value<string>())
         ("o,output-fastq", "Output fastq file prefix", cxxopts::value<string>())
         ("I,paired-input-fastq", "Paired input fastq file name", cxxopts::value<string>())
@@ -69,7 +69,7 @@ int main(int argc, char* argv[])
         pclose(fp);
     }
 
-    SplitFASTQ(kVerboseFlag, kBatchSize, kInputFastq1, kOutputFastq1, kInputFastq2, kOutputFastq2, options["hdfs-buffer-size"].as<int>(), options["hdfs-replication"].as<short>(), options["hdfs-block-size"].as<size_t>(), options["compression-level"].as<int8_t>());
+    SplitFASTQ(kVerboseFlag, kBatchSize, nullptr, kInputFastq1, kOutputFastq1, kInputFastq2, kOutputFastq2, options["hdfs-buffer-size"].as<int>(), options["hdfs-replication"].as<short>(), options["hdfs-block-size"].as<size_t>(), options["compression-level"].as<int8_t>());
 
     return 0;
 }

@@ -26,23 +26,25 @@ public final class NativeSplitFastqSparkEngine implements Serializable {
         long fastqSplitReplication = fastqSplitParamsTuple._2()[1];
         long fastqSplitCompressionLevel = fastqSplitParamsTuple._2()[2];
         System.loadLibrary("splitfastq");
-        int numSplits = doNativeSplit(
+        int[] nativeSplitResult = doNativeSplit(
             inputFastq1, inputSplittedFastq1,
             inputFastq2, inputSplittedFastq2,
             fastqSplitSize, fastqSplitReplication, fastqSplitCompressionLevel
         );
+        int numSplits = nativeSplitResult[0];
+        int fastqSplitSizeInSeq = (int)(fastqSplitSize/nativeSplitResult[1]);
         List<Tuple3<String, String, Long> > fastqSplits = new ArrayList<Tuple3<String, String, Long> >(numSplits);
         for(int i = 0; i<numSplits; ++i) {
             fastqSplits.add(new Tuple3<String, String, Long>(
                 inputSplittedFastq1+".part"+i,
                 inputSplittedFastq2==null ? null : inputSplittedFastq2+".part"+i,
-                new Long((long)i*fastqSplitSize)
+                new Long((long)i*(fastqSplitSizeInSeq))
             ));
         }
         return fastqSplits;
     }
 
-    private static native int doNativeSplit(
+    private static native int[] doNativeSplit(
         String inputFastq1, String inputSplittedFastq1,
         String inputFastq2, String inputSplittedFastq2,
         long fastqSplitSize, long fastqSplitReplication, long fastqSplitCompressionLevel
