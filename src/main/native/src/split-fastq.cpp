@@ -1,6 +1,7 @@
 #include<cstring>
 
 #include<iostream>
+#include<map>
 #include<string>
 #include<thread>
 #include<tuple>
@@ -102,9 +103,64 @@ static void WriteHDFS(int read_fd, hdfsFS hdfs_fs, hdfsFile hdfs_file)
     delete[] buffer;
 }
 
+static void ReadHDFS(hdfsFS hdfs_fs, hdfsFile hdfs_file, int write_fd)
+{
+    const size_t kBufferSize = 1<<16;
+    char* buffer = new char[kBufferSize];
+    tSize read_bytes = 0;
+    for(;;)
+    {
+        read_bytes = hdfsRead(hdfs_fs, hdfs_file, buffer, kBufferSize);
+        if(read_bytes < 0)
+        {
+            if(errno==EINTR)
+            {
+                clog<<"WARNING: Retry read from HDFS: "<<strerror(errno)<<endl;
+                continue;
+            }
+            clog<<"ERROR: Cannot read from HDFS: "<<strerror(errno)<<endl;
+            exit(2);
+        }
+        read_bytes = write(write_fd, buffer, read_bytes);
+        if(read_bytes==0)
+        {
+            break;
+        }
+        else if(read_bytes < 0)
+        {
+            clog<<"ERROR: Cannot write to pipe: "<<strerror(errno)<<endl;
+            exit(2);
+        }
+    }
+    if(hdfsCloseFile(hdfs_fs, hdfs_file) < 0)
+    {
+        clog<<"ERROR: Cannot close HDFS file: "<<strerror(errno)<<endl;
+        exit(2);
+    }
+    close(write_fd);
+    delete[] buffer;
+}
+
 int SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& kInputFastq1, const string& kOutputFastq1, const string& kInputFastq2, const string& kOutputFastq2, const int kHDFSBufferSize = 0, const short kHDFSReplication = 0, const size_t kHDFSBlockSize = 0, const int8_t kCompressionLevel = 1)
 {
-    // TODO: cannot read input from HDFS
+    // initialize hdfs
+    const string kHDFSProto = "hdfs://";
+    const bool kInput1IsHDFS = kInputFastq1.substr(0, kHDFSProto.size()) == kHDFSProto;
+    const bool kInput2IsHDFS = kInputFastq2.substr(0, kHDFSProto.size()) == kHDFSProto;
+    const bool kOutput1IsHDFS = kOutputFastq1.substr(0, kHDFSProto.size()) == kHDFSProto;
+    const bool kOutput2IsHDFS = kOutputFastq2.substr(0, kHDFSProto.size()) == kHDFSProto;
+    hdfsFS input_hdfs1 = nullptr;
+    hdfsFS input_hdfs2 = nullptr;
+    hdfsFS output_hdfs1 = nullptr;
+    hdfsFS output_hdfs2 = nullptr;
+    string input_hdfs1_nodename;
+    string input_hdfs2_nodename;
+    string output_hdfs1_nodename;
+    string output_hdfs2_nodename;
+    string output_fastq1_hdfs_path;
+    string output_fastq2_hdfs_path;
+    map<string, hdfsFS> hdfs_map;
+
     // local parameters
     vector<pid_t> children;
     vector<thread> threads;
@@ -116,6 +172,54 @@ int SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& kI
     pid_t input_pid2 = -1;
     int input_pipe1[2] = {};
     int input_pipe2[2] = {};
+
+    int gz_read_pipe1[2] = {};
+    int gz_read_pipe2[2] = {};
+
+    if(kInput1IsHDFS)
+    {
+        // connect to HDFS if not already connected
+        input_hdfs1_nodename = kInputFastq1.substr(0, kInputFastq1.find('/', kHDFSProto.size()));
+        if(hdfs_map.count(input_hdfs1_nodename)==0)
+        {
+            if(kVerboseFlag)
+            {
+                clog<<"INFO: Connect to "<<input_hdfs1_nodename<<endl;
+            }
+            hdfsBuilder* hdfs_builder = hdfsNewBuilder();   // freed by hdfsBuilderConnect
+            hdfsBuilderSetNameNode(hdfs_builder, input_hdfs1_nodename.c_str());
+            input_hdfs1 = hdfsBuilderConnect(hdfs_builder);
+            if(input_hdfs1==nullptr)
+            {
+                clog<<"ERROR: Cannot connect to "<<input_hdfs1_nodename<<endl;
+                exit(2);
+            }
+            hdfs_map[input_hdfs1_nodename] = input_hdfs1;
+        }
+        else
+        {
+            input_hdfs1 = hdfs_map[input_hdfs1_nodename];
+        }
+
+        // open HDFS file
+        if(pipe(gz_read_pipe1)!=0)
+        {
+            clog<<"ERROR: Cannot make pipe: "<<strerror(errno)<<endl;
+            exit(2);
+        }
+        hdfsFile hdfs_file1 = hdfsOpenFile(input_hdfs1, kInputFastq1.c_str(), O_RDONLY,
+            kHDFSBufferSize, kHDFSReplication, kHDFSBlockSize);
+        if(hdfs_file1==nullptr)
+        {
+            clog<<"ERROR: Cannot open file on HDFS"<<endl;
+            exit(2);
+        }
+        threads.push_back(thread(ReadHDFS, input_hdfs1, hdfs_file1, gz_read_pipe1[1]));
+    }
+    else
+    {
+        gz_read_pipe1[0] = open(kInputFastq1.c_str(), O_RDONLY);
+    }
 
     if(pipe(input_pipe1)!=0)
     {
@@ -134,9 +238,13 @@ int SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& kI
         dup2(input_pipe1[1], STDOUT_FILENO);
         close(input_pipe1[0]);
         close(input_pipe1[1]);
-        char input_filename[1<<16] = {};
-        strncpy(input_filename, kInputFastq1.c_str(), kInputFastq1.size());
-        char* args[4] = {gzip, decompress, input_filename, nullptr};
+        dup2(gz_read_pipe1[0], STDIN_FILENO);
+        close(gz_read_pipe1[0]);
+        if(kInput1IsHDFS)
+        {
+            close(gz_read_pipe1[1]);
+        }
+        char* args[3] = {gzip, decompress, nullptr};
         execvp(gzip, args);
         clog<<"ERROR: Cannot exec gzip: "<<strerror(errno)<<endl;
         exit(2);
@@ -145,6 +253,10 @@ int SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& kI
     {
         children.push_back(input_pid1);
         close(input_pipe1[1]);
+        if(!kInput1IsHDFS)
+        {
+            close(gz_read_pipe1[0]);
+        }
     }
 
     FILE* input1 = fdopen(input_pipe1[0], "r");
@@ -154,6 +266,50 @@ int SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& kI
 
     if(kIsPaired)
     {
+        if(kInput2IsHDFS)
+        {
+            // connect to HDFS if not already connected
+            input_hdfs2_nodename = kInputFastq2.substr(0, kInputFastq2.find('/', kHDFSProto.size()));
+            if(hdfs_map.count(input_hdfs2_nodename)==0)
+            {
+                if(kVerboseFlag)
+                {
+                    clog<<"INFO: Connect to "<<input_hdfs2_nodename<<endl;
+                }
+                hdfsBuilder* hdfs_builder = hdfsNewBuilder();   // freed by hdfsBuilderConnect
+                hdfsBuilderSetNameNode(hdfs_builder, input_hdfs2_nodename.c_str());
+                input_hdfs2 = hdfsBuilderConnect(hdfs_builder);
+                if(input_hdfs2==nullptr)
+                {
+                    clog<<"ERROR: Cannot connect to "<<input_hdfs2_nodename<<endl;
+                    exit(2);
+                }
+                hdfs_map[input_hdfs2_nodename] = input_hdfs2;
+            }
+            else
+            {
+                input_hdfs2 = hdfs_map[input_hdfs2_nodename];
+            }
+
+            // open HDFS file
+            if(pipe(gz_read_pipe2)!=0)
+            {
+                clog<<"ERROR: Cannot make pipe: "<<strerror(errno)<<endl;
+                exit(2);
+            }
+            hdfsFile hdfs_file2 = hdfsOpenFile(input_hdfs2, kInputFastq2.c_str(), O_RDONLY,
+                kHDFSBufferSize, kHDFSReplication, kHDFSBlockSize);
+            if(hdfs_file2==nullptr)
+            {
+                clog<<"ERROR: Cannot open file on HDFS"<<endl;
+                exit(2);
+            }
+            threads.push_back(thread(ReadHDFS, input_hdfs2, hdfs_file2, gz_read_pipe2[1]));
+        }
+        else
+        {
+            gz_read_pipe2[0] = open(kInputFastq2.c_str(), O_RDONLY);
+        }
         if(pipe(input_pipe2)!=0)
         {
             clog<<"ERROR: Cannot make pipe: "<<strerror(errno)<<endl;
@@ -171,9 +327,13 @@ int SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& kI
             dup2(input_pipe2[1], STDOUT_FILENO);
             close(input_pipe2[0]);
             close(input_pipe2[1]);
-            char input_filename[1<<16] = {};
-            strncpy(input_filename, kInputFastq2.c_str(), kInputFastq2.size());
-            char* args[4] = {gzip, decompress, input_filename, nullptr};
+            dup2(gz_read_pipe2[0], STDIN_FILENO);
+            close(gz_read_pipe2[0]);
+            if(kInput2IsHDFS)
+            {
+                close(gz_read_pipe2[1]);
+            }
+            char* args[3] = {gzip, decompress, nullptr};
             execvp(gzip, args);
             clog<<"ERROR: Cannot exec gzip: "<<strerror(errno)<<endl;
             exit(2);
@@ -182,61 +342,63 @@ int SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& kI
         {
             children.push_back(input_pid2);
             close(input_pipe2[1]);
+            if(!kInput2IsHDFS)
+            {
+                close(gz_read_pipe2[0]);
+            }
         }
         input2 = fdopen(input_pipe2[0], "r");
     }
 
-    // initialize hdfs
-    const string kHDFSProto = "hdfs://";
-    const bool kOutput1IsHDFS = kOutputFastq1.substr(0, kHDFSProto.size()) == kHDFSProto;
-    const bool kOutput2IsHDFS = kOutputFastq2.substr(0, kHDFSProto.size()) == kHDFSProto;
-    hdfsFS hdfs_fs1 = nullptr;
-    hdfsFS hdfs_fs2 = nullptr;
-    string hdfs1_nodename;
-    string hdfs2_nodename;
-    string output_fastq1_hdfs_path;
-    string output_fastq2_hdfs_path;
-
     if(kOutput1IsHDFS)
     {
-        hdfs1_nodename = kOutputFastq1.substr(0, kOutputFastq1.find('/', kHDFSProto.size()));
-        output_fastq1_hdfs_path = kOutputFastq1.substr(hdfs1_nodename.size(), string::npos);
-        if(kVerboseFlag)
+        // connect to HDFS if not already connected
+        output_hdfs1_nodename = kOutputFastq1.substr(0, kOutputFastq1.find('/', kHDFSProto.size()));
+        output_fastq1_hdfs_path = kOutputFastq1.substr(output_hdfs1_nodename.size(), string::npos);
+        if(hdfs_map.count(output_hdfs1_nodename)==0)
         {
-            clog<<"INFO: Connect to "<<hdfs1_nodename<<endl;
+            if(kVerboseFlag)
+            {
+                clog<<"INFO: Connect to "<<output_hdfs1_nodename<<endl;
+            }
+            hdfsBuilder* hdfs_builder = hdfsNewBuilder();   // freed by hdfsBuilderConnect
+            hdfsBuilderSetNameNode(hdfs_builder, output_hdfs1_nodename.c_str());
+            output_hdfs1 = hdfsBuilderConnect(hdfs_builder);
+            if(output_hdfs1==nullptr)
+            {
+                clog<<"ERROR: Cannot connect to "<<output_hdfs1_nodename<<endl;
+                exit(2);
+            }
+            hdfs_map[output_hdfs1_nodename] = output_hdfs1;
         }
-        hdfsBuilder* hdfs_builder = hdfsNewBuilder();   // freed by hdfsBuilderConnect
-        hdfsBuilderSetNameNode(hdfs_builder, hdfs1_nodename.c_str());
-        hdfs_fs1 = hdfsBuilderConnect(hdfs_builder);
-        if(hdfs_fs1==nullptr)
+        else
         {
-            clog<<"ERROR: Cannot connect to "<<hdfs1_nodename<<endl;
-            exit(2);
+            output_hdfs1 = hdfs_map[output_hdfs1_nodename];
         }
     }
 
     if(kOutput2IsHDFS)  // implies kIsPaired
     {
-        hdfs2_nodename = kOutputFastq2.substr(0, kOutputFastq2.find('/', kHDFSProto.size()));
-        output_fastq2_hdfs_path = kOutputFastq2.substr(hdfs2_nodename.size(), string::npos);
-        if(hdfs1_nodename != hdfs2_nodename)
+        output_hdfs2_nodename = kOutputFastq2.substr(0, kOutputFastq2.find('/', kHDFSProto.size()));
+        output_fastq2_hdfs_path = kOutputFastq2.substr(output_hdfs2_nodename.size(), string::npos);
+        if(hdfs_map.count(output_hdfs2_nodename)==0)
         {
             if(kVerboseFlag)
             {
-                clog<<"INFO: Connect to "<<hdfs2_nodename<<endl;
+                clog<<"INFO: Connect to "<<output_hdfs2_nodename<<endl;
             }
             hdfsBuilder* hdfs_builder = hdfsNewBuilder();   // freed by hdfsBuilderConnect
-            hdfsBuilderSetNameNode(hdfs_builder, hdfs2_nodename.c_str());
-            hdfs_fs2 = hdfsBuilderConnect(hdfs_builder);
-            if(hdfs_fs2==nullptr)
+            hdfsBuilderSetNameNode(hdfs_builder, output_hdfs2_nodename.c_str());
+            output_hdfs2 = hdfsBuilderConnect(hdfs_builder);
+            if(output_hdfs2==nullptr)
             {
-                clog<<"ERROR: Cannot connect to "<<hdfs2_nodename<<endl;
+                clog<<"ERROR: Cannot connect to "<<output_hdfs2_nodename<<endl;
                 exit(2);
             }
         }
         else
         {
-            hdfs_fs2 = hdfs_fs1;
+            output_hdfs2 = hdfs_map[output_hdfs2_nodename];
         }
     }
 
@@ -277,7 +439,7 @@ int SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& kI
             int write_pipe[2];
             pipe(write_pipe);
             gzFile output_file1 = gzdopen(write_pipe[1], gz_write_mode);
-            hdfsFile hdfs_file1 = hdfsOpenFile(hdfs_fs1, output_filename_string.c_str(), O_WRONLY,
+            hdfsFile hdfs_file1 = hdfsOpenFile(output_hdfs1, output_filename_string.c_str(), O_WRONLY,
                 kHDFSBufferSize, kHDFSReplication, kHDFSBlockSize);
             if(hdfs_file1==nullptr)
             {
@@ -285,7 +447,7 @@ int SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& kI
                 exit(2);
             }
             threads.push_back(thread(WriteBatch, output1, line_count1, output_file1));
-            threads.push_back(thread(WriteHDFS, write_pipe[0], hdfs_fs1, hdfs_file1));
+            threads.push_back(thread(WriteHDFS, write_pipe[0], output_hdfs1, hdfs_file1));
         }
         else
         {
@@ -302,7 +464,7 @@ int SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& kI
                 int write_pipe[2];
                 pipe(write_pipe);
                 gzFile output_file2 = gzdopen(write_pipe[1], gz_write_mode);
-                hdfsFile hdfs_file2 = hdfsOpenFile(hdfs_fs2, output_filename_string.c_str(), O_WRONLY,
+                hdfsFile hdfs_file2 = hdfsOpenFile(output_hdfs2, output_filename_string.c_str(), O_WRONLY,
                     kHDFSBufferSize, kHDFSReplication, kHDFSBlockSize);
                 if(hdfs_file2==nullptr)
                 {
@@ -310,7 +472,7 @@ int SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& kI
                     exit(2);
                 }
                 threads.push_back(thread(WriteBatch, output2, line_count2, output_file2));
-                threads.push_back(thread(WriteHDFS, write_pipe[0], hdfs_fs2, hdfs_file2));
+                threads.push_back(thread(WriteHDFS, write_pipe[0], output_hdfs2, hdfs_file2));
             }
             else
             {
@@ -334,9 +496,9 @@ int SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& kI
         if(kOutput1IsHDFS)
         {
             string output_filename_string = output_fastq1_hdfs_path+".part"+to_string(batch_id);
-            if(hdfsExists(hdfs_fs1, output_filename_string.c_str())==0)
+            if(hdfsExists(output_hdfs1, output_filename_string.c_str())==0)
             {
-                if(hdfsDelete(hdfs_fs1, output_filename_string.c_str(), 0)!=0)
+                if(hdfsDelete(output_hdfs1, output_filename_string.c_str(), 0)!=0)
                 {
                     clog<<"WARNING: Cannot remove extra file \""<<output_filename_string<<"\": "<<strerror(errno)<<endl;
                 }
@@ -364,9 +526,9 @@ int SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& kI
             if(kOutput2IsHDFS)
             {
                 string output_filename_string = output_fastq2_hdfs_path+".part"+to_string(batch_id);
-                if(hdfsExists(hdfs_fs2, output_filename_string.c_str())==0)
+                if(hdfsExists(output_hdfs2, output_filename_string.c_str())==0)
                 {
-                    if(hdfsDelete(hdfs_fs2, output_filename_string.c_str(), 0)!=0)
+                    if(hdfsDelete(output_hdfs2, output_filename_string.c_str(), 0)!=0)
                     {
                         clog<<"WARNING: Cannot remove extra file \""<<output_filename_string<<"\": "<<strerror(errno)<<endl;
                     }
@@ -412,15 +574,18 @@ int SplitFASTQ(const int kVerboseFlag, const size_t kBatchSize, const string& kI
     {
         fclose(input2);
     }
-
-    if(kOutput1IsHDFS)
+    if(!kInput1IsHDFS)
     {
-        hdfsDisconnect(hdfs_fs1);
+        close(gz_read_pipe1[0]);
+    }
+    if(!kInput2IsHDFS)
+    {
+        close(gz_read_pipe2[0]);
     }
 
-    if(kOutput2IsHDFS && hdfs_fs1!=hdfs_fs2)
+    for(auto i: hdfs_map)
     {
-        hdfsDisconnect(hdfs_fs2);
+        hdfsDisconnect(i.second);
     }
 
     return int(num_splits);
