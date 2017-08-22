@@ -303,6 +303,12 @@ public class ReadsPipelineSpark extends GATKSparkTool {
                 if(fastqSplitSize==0) {
                     fastqSplitSize = 10000000L;
                 }
+                if(inputSplittedFastq1==null) {
+                    inputSplittedFastq1 = inputFastq1;
+                }
+                if(inputSplittedFastq2==null) {
+                    inputSplittedFastq2 = inputFastq2;
+                }
                 Tuple2<String[], long[]> fastqSplitParams = new Tuple2<String[], long[]>(
                     new String[]{inputFastq1, inputSplittedFastq1,
                                  inputFastq2, inputSplittedFastq2},
