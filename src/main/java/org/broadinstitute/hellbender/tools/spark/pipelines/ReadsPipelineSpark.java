@@ -3,19 +3,26 @@ package org.broadinstitute.hellbender.tools.spark.pipelines;
 import com.google.common.annotations.VisibleForTesting;
 import htsjdk.samtools.SAMFileHeader;
 import htsjdk.samtools.SAMSequenceDictionary;
+import htsjdk.samtools.SAMTextHeaderCodec;
 import htsjdk.samtools.reference.ReferenceSequence;
 import htsjdk.samtools.reference.ReferenceSequenceFile;
 import htsjdk.samtools.util.OverlapDetector;
+import htsjdk.samtools.util.StringLineReader;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import htsjdk.variant.vcf.VCFHeader;
 import org.broadinstitute.barclay.argparser.BetaFeature;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.utils.SerializableFunction;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileStatus;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
 import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.api.java.function.FlatMapFunction;
+import org.apache.spark.api.java.StorageLevels;
 import org.apache.spark.broadcast.Broadcast;
 import org.broadinstitute.barclay.argparser.*;
 import org.broadinstitute.barclay.help.DocumentedFeature;
@@ -25,6 +32,7 @@ import org.broadinstitute.hellbender.cmdline.programgroups.SparkPipelineProgramG
 import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.engine.datasources.ReferenceMultiSource;
 import org.broadinstitute.hellbender.engine.filters.ReadFilter;
+import org.broadinstitute.hellbender.engine.filters.WellformedReadFilter;
 import org.broadinstitute.hellbender.engine.spark.AddContextDataToReadSpark;
 import org.broadinstitute.hellbender.engine.spark.GATKSparkTool;
 import org.broadinstitute.hellbender.engine.spark.JoinStrategy;
@@ -37,6 +45,8 @@ import org.broadinstitute.hellbender.tools.ApplyBQSRUniqueArgumentCollection;
 import org.broadinstitute.hellbender.tools.spark.transforms.ApplyBQSRSparkFn;
 import org.broadinstitute.hellbender.tools.spark.transforms.BaseRecalibratorSparkFn;
 import org.broadinstitute.hellbender.tools.spark.transforms.markduplicates.MarkDuplicatesSpark;
+import org.broadinstitute.hellbender.tools.spark.bwa.NativeBwaSparkEngine;
+import org.broadinstitute.hellbender.tools.spark.bwa.NativeSplitFastqSparkEngine;
 import org.broadinstitute.hellbender.tools.walkers.bqsr.BaseRecalibrator;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.HaplotypeCaller;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.HaplotypeCallerArgumentCollection;
@@ -55,25 +65,34 @@ import org.broadinstitute.hellbender.utils.reference.ReferenceBases;
 import org.broadinstitute.hellbender.utils.spark.SparkUtils;
 import org.broadinstitute.hellbender.utils.variant.GATKVariant;
 import scala.Tuple2;
+import scala.Tuple3;
 
 import java.io.IOException;
 import java.io.Serializable;
+import java.io.FileWriter;
+import java.io.BufferedWriter;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
+
+import org.broadinstitute.hellbender.engine.spark.datasources.ReadsSparkSink;
+import org.broadinstitute.hellbender.utils.read.ReadsWriteFormat;
+
 @CommandLineProgramProperties(
-        summary = "Takes aligned reads (likely from BWA) and runs MarkDuplicates and BQSR and HaplotypeCaller. The final result is VCF file.",
-        oneLineSummary = "Takes aligned reads (likely from BWA) and runs MarkDuplicates and BQSR HaplotypeCaller. The final result is VCF file.",
-        usageExample = "ReadsPipelineSpark -I single.bam -R referenceURL -knownSites variants.vcf -O file:///tmp/output.vcf",
+        summary = "Takes unaligned fastq reads and runs Burrows-Wheeler Aligner, Mark Duplicates, Base Quality Score Recalibration, and Haplotype Caller. The final result is a VCF file.",
+        oneLineSummary = "Takes unaligned fastq reads and runs BWA, MD, BQSR, and HC. The final result is a VCF file.",
+        usageExample = "ReadsPipelineSpark --inputFastq1 input.fastq.gz [--inputFastq2 input2.fastq.gz] --bwamemIndexImage bwaIndexImage -R referenceURL --knownSites variants.vcf -O file:///tmp/output.vcf",
         programGroup = SparkPipelineProgramGroup.class
 )
 
 /**
- * ReadsPipelineSpark is our standard pipeline that takes aligned reads (likely from BWA) and runs MarkDuplicates
- * and BQSR. The final result is analysis-ready reads.
+ * ReadsPipelineSpark is our standard pipeline that takes unaligned fastq reads
+ * and runs BWA, MarkDuplicates, BQSR, and HaplotypeCaller.
  */
 @DocumentedFeature
 @BetaFeature
@@ -81,17 +100,75 @@ public class ReadsPipelineSpark extends GATKSparkTool {
     private static final long serialVersionUID = 1L;
 
     @Override
-    public boolean requiresReads() { return true; }
-
-    @Override
     public boolean requiresReference() { return true; }
-
 
     @Argument(doc = "the known variants", shortName = "knownSites", fullName = "knownSites", optional = false)
     protected List<String> baseRecalibrationKnownVariants;
 
-    @Argument(doc = "Single file to which variants should be written", fullName= StandardArgumentDefinitions.OUTPUT_LONG_NAME, shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME)
+    @Argument(doc = "input [gzipped] fastq file", fullName = "inputFastq1")
+    protected String inputFastq1 = null;
+
+    @Argument(doc = "paired input [gzipped] fastq file", fullName = "inputFastq2", optional = true)
+    protected String inputFastq2 = null;
+
+    @Argument(doc = "input splitted [gzipped] fastq file prefix", fullName = "inputSplittedFastq1", optional = true)
+    protected String inputSplittedFastq1 = null;
+
+    @Argument(doc = "paired input splitted [gzipped] fastq file prefix", fullName = "inputSplittedFastq2", optional = true)
+    protected String inputSplittedFastq2 = null;
+
+    @Argument(doc = "whether to keep splitted fastq files", fullName = "keepFastqSplit", optional = true)
+    protected boolean keepFastqSplit = false;
+
+    @Argument(doc = "whether to persist markedReads", fullName = "persistMarkedReads", optional = true)
+    protected boolean persistMarkedReads = false;
+
+    @Argument(doc = "whether to persist in serialized form", fullName = "persistSerialized", optional = true)
+    protected boolean persistSerialized = true;
+
+    @Argument(doc = "whether to split fastq on driver", fullName = "splitFastqOnDriver", optional = true)
+    protected boolean splitFastqOnDriver= false;
+
+    @Argument(doc = "number of bases in each fastq split", fullName = "fastqSplitSize", optional = true)
+    protected long fastqSplitSize = 0L;
+
+    @Argument(doc = "fastq split compression level", fullName = "fastqSplitCompressionLevel", optional = true)
+    protected int fastqSplitCompressionLevel = 1;
+
+    @Argument(doc = "fastq split file replication", fullName = "fastqSplitReplication", optional = true)
+    protected int fastqSplitReplication = 3;
+
+    @Argument(doc = "force generate fastq splits", fullName = "forceSplitFastq", optional = true)
+    protected boolean forceSplitFastq = false;
+
+    @Argument(doc = "Complete read group header line. ’\t’ can be used in STR and will be converted to a TAB in the output SAM. The read group ID will be attached to every read in the output. An example is ’@RG\tID:foo\tSM:bar’.", fullName = "readGroupHeaderLine", optional = true)
+    protected String readGroupHeaderLine = null;
+
+    @Argument(doc = "Misc bwa options, for example, '-Ma -k 19'. Avaiable options are 'kwdrcPABOELUpTaCHMv', see bwa(1) for details. The read group header line must be given through the `--readGroupHeaderLine` option.", fullName = "bwaOptions", optional = true)
+    protected String bwaOptions = null;
+
+    @Override
+    public SAMFileHeader getHeaderForReads() {
+        if(readsHeader == null) {
+            if(readGroupHeaderLine!=null) {
+                readsHeader = new SAMTextHeaderCodec().decode(new StringLineReader(readGroupHeaderLine), null);
+            }
+        }
+        return readsHeader;
+    }
+
+    public void setHeaderForReads(String headerString) {
+        readsHeader = new SAMTextHeaderCodec().decode(new StringLineReader(headerString), null);
+    }
+
+    protected SAMFileHeader readsHeader = null;
+
+    @Argument(doc = "Single file to which variants should be written", fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME, shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME)
     protected String output;
+
+    @Argument(doc = "the bwa mem index image file name that you've distributed to each executor",
+              fullName = "bwamemIndexImage")
+    private String indexImageFile;
 
     @ArgumentCollection
     public final ShardingArgumentCollection shardingArgs = new ShardingArgumentCollection();
@@ -158,15 +235,128 @@ public class ReadsPipelineSpark extends GATKSparkTool {
 
     @Override
     protected void runTool(final JavaSparkContext ctx) {
+        // read fastq inputs
+        JavaRDD<Tuple3<String, String, Long> > fastqRecords = null;
+        try {
+            // run split-fastq if necessary
+            FileSystem fs = FileSystem.get(new URI(inputFastq1), new Configuration(true));
+            boolean doSplit = false;
+            if(forceSplitFastq) {
+                doSplit = true;
+            } else {
+                if(inputSplittedFastq1==null) {
+                    if(fs.exists(new Path(new URI(inputFastq1)))) {
+                        inputSplittedFastq1 = inputFastq1;
+                        inputSplittedFastq2 = inputFastq2;
+                        doSplit = true;
+                    } else {
+                        throw new UserException("Cannot find file: "+inputFastq1);
+                    }
+                } else {
+                    FileSystem split_fs = FileSystem.get(new URI(inputSplittedFastq1), new Configuration(true));
+                    FileStatus[] inputSplittedFastq1Files = split_fs.globStatus(new Path(new URI(inputSplittedFastq1+".part*")));
+                    if(inputSplittedFastq1Files.length>0) {
+                        // read directly without splitting, ignore inputFastq1
+                        List<Tuple3<String, String, Long> > fastqRecordList = new ArrayList<Tuple3<String, String, Long> >();
+                        Set<Integer> fileSet = new HashSet<Integer>();
+                        for(FileStatus file:inputSplittedFastq1Files)
+                        {
+                            String pathString = file.getPath().toString();
+                            fileSet.add(Integer.parseInt(pathString.substring(pathString.lastIndexOf(".part")+5)));
+                        }
+
+                        long fastqSplitSizeInSeq = fastqSplitSize;
+                        if(fastqSplitSize>0)
+                        {
+                            List<String> sampleFastq = ctx.textFile(inputSplittedFastq1+".part0").take(2);
+                            fastqSplitSizeInSeq /= sampleFastq.get(1).length() - 1;
+                        }
+
+                        // stop if there is a gap
+                        for(int i = 0;; ++i)
+                        {
+                            if(fileSet.contains(new Integer(i)))
+                            {
+                                fastqRecordList.add(
+                                    new Tuple3<String, String, Long>(inputSplittedFastq1+".part"+i, inputSplittedFastq2!=null ? inputSplittedFastq2+".part"+i : null, new Long((long)i*(fastqSplitSizeInSeq)))
+                                );
+                            } else {
+                                if(numReducers==0) {
+                                    numReducers = i;
+                                }
+                                break;
+                            }
+                        }
+                        fastqRecords = ctx.parallelize(fastqRecordList, fastqRecordList.size());
+                        fastqRecords.setName("fastqRecords");
+                    } else {
+                        if(fs.exists(new Path(new URI(inputFastq1)))) {
+                            doSplit = true;
+                        } else {
+                            throw new UserException("Cannot find file: "+inputFastq1);
+                        }
+                    }
+                }
+            }
+
+            if(doSplit) {
+                if(fastqSplitSize==0) {
+                    fastqSplitSize = 10000000L;
+                }
+                if(inputSplittedFastq1==null) {
+                    inputSplittedFastq1 = inputFastq1;
+                }
+                if(inputSplittedFastq2==null) {
+                    inputSplittedFastq2 = inputFastq2;
+                }
+                Tuple2<String[], long[]> fastqSplitParams = new Tuple2<String[], long[]>(
+                    new String[]{inputFastq1, inputSplittedFastq1,
+                                 inputFastq2, inputSplittedFastq2},
+                    new long[]{fastqSplitSize, fastqSplitReplication, fastqSplitCompressionLevel});
+                List<Tuple3<String, String, Long> > fastqRecordList;
+                if(splitFastqOnDriver) {
+                    fastqRecordList = NativeSplitFastqSparkEngine.doSplit(fastqSplitParams);
+                } else {
+                    List<Tuple2<String[], long[]> > fastqSplitParamsList =
+                        new ArrayList<Tuple2<String[], long[]> >(1);
+                    fastqSplitParamsList.add(fastqSplitParams);
+                    fastqRecordList = NativeSplitFastqSparkEngine.split(ctx.parallelize(fastqSplitParamsList, 1)).collect();
+                }
+                fastqRecords = ctx.parallelize(fastqRecordList, fastqRecordList.size());
+                fastqRecords.setName("fastqRecords");
+                if(numReducers==0) {
+                    numReducers = fastqRecords.getNumPartitions();
+                }
+            }
+        } catch (IOException e) {
+            throw new UserException("Cannot open file: "+e.getMessage());
+        } catch (URISyntaxException e) {
+            throw new UserException("URI syntax error: "+e.getMessage());
+        }
+
+        // bwa
+        final NativeBwaSparkEngine bwaEngine = new NativeBwaSparkEngine(indexImageFile, readGroupHeaderLine, bwaOptions);
+        setHeaderForReads(bwaEngine.getHeaderString());
+        bwaEngine.setHeaderObject(getHeaderForReads());
+
+        final WellformedReadFilter wellformedReadFilter = new WellformedReadFilter(getHeaderForReads());
+        final JavaRDD<GATKRead> rawReads = bwaEngine.align(fastqRecords).setName("rawReads");
+
+        rawReads.persist(persistSerialized ? org.apache.spark.api.java.StorageLevels.MEMORY_AND_DISK_SER : org.apache.spark.api.java.StorageLevels.MEMORY_AND_DISK);
+
+        final JavaRDD<GATKRead> initialReads = rawReads.filter(read -> wellformedReadFilter.test(read)).setName("initialReads");
+
         if (joinStrategy == JoinStrategy.BROADCAST && ! getReference().isCompatibleWithSparkBroadcast()){
             throw new UserException.Require2BitReferenceForBroadcast();
         }
 
-        //TOOO: should this use getUnfilteredReads? getReads will apply default and command line filters
-        final JavaRDD<GATKRead> initialReads = getReads();
-
-        final JavaRDD<GATKRead> markedReadsWithOD = MarkDuplicatesSpark.mark(initialReads, getHeaderForReads(), duplicatesScoringStrategy, new OpticalDuplicateFinder(), getRecommendedNumReducers());
-        final JavaRDD<GATKRead> markedReads = MarkDuplicatesSpark.cleanupTemporaryAttributes(markedReadsWithOD);
+        // mark duplicates
+        final JavaRDD<GATKRead> markedReadsWithOD = MarkDuplicatesSpark.mark(initialReads, getHeaderForReads(), duplicatesScoringStrategy, new OpticalDuplicateFinder(), getRecommendedNumReducers()).setName("markedReadsWithOD");
+        final JavaRDD<GATKRead> markedReads = MarkDuplicatesSpark.cleanupTemporaryAttributes(markedReadsWithOD).setName("markedReads");
+        if(persistMarkedReads)
+        {
+            markedReads.persist(persistSerialized ? org.apache.spark.api.java.StorageLevels.MEMORY_AND_DISK_SER : org.apache.spark.api.java.StorageLevels.MEMORY_AND_DISK);
+        }
 
         // The markedReads have already had the WellformedReadFilter applied to them, which
         // is all the filtering that MarkDupes and ApplyBQSR want. BQSR itself wants additional
@@ -174,7 +364,7 @@ public class ReadsPipelineSpark extends GATKSparkTool {
         //NOTE: this doesn't honor enabled/disabled commandline filters
         final ReadFilter bqsrReadFilter = ReadFilter.fromList(BaseRecalibrator.getBQSRSpecificReadFilterList(), getHeaderForReads());
 
-        JavaRDD<GATKRead> markedFilteredReadsForBQSR = markedReads.filter(read -> bqsrReadFilter.test(read));
+        JavaRDD<GATKRead> markedFilteredReadsForBQSR = markedReads.filter(read -> bqsrReadFilter.test(read)).setName("markedFilteredReadsForBQSR");
 
         if (joinStrategy.equals(JoinStrategy.OVERLAPS_PARTITIONER)) {
             // the overlaps partitioner requires that reads are coordinate-sorted
@@ -184,19 +374,26 @@ public class ReadsPipelineSpark extends GATKSparkTool {
         }
 
         final VariantsSparkSource variantsSparkSource = new VariantsSparkSource(ctx);
-        final JavaRDD<GATKVariant> bqsrKnownVariants = variantsSparkSource.getParallelVariants(baseRecalibrationKnownVariants, getIntervals());
+        final JavaRDD<GATKVariant> bqsrKnownVariants = variantsSparkSource.getParallelVariants(baseRecalibrationKnownVariants, getIntervals()).setName("bqsrKnownVariants");
 
-        final JavaPairRDD<GATKRead, ReadContextData> rddReadContext = AddContextDataToReadSpark.add(ctx, markedFilteredReadsForBQSR, getReference(), bqsrKnownVariants, baseRecalibrationKnownVariants, joinStrategy, getHeaderForReads().getSequenceDictionary(), readShardSize, readShardPadding);
+        final JavaPairRDD<GATKRead, ReadContextData> rddReadContext = AddContextDataToReadSpark.add(ctx, markedFilteredReadsForBQSR, getReference(), bqsrKnownVariants, baseRecalibrationKnownVariants, joinStrategy, getHeaderForReads().getSequenceDictionary(), readShardSize, readShardPadding).setName("rddReadContext");
         final RecalibrationReport bqsrReport = BaseRecalibratorSparkFn.apply(rddReadContext, getHeaderForReads(), getReferenceSequenceDictionary(), bqsrArgs);
 
+        // there is a treeAggregate up there, if we are to unpersist rawReads, this is the time
+        if(persistMarkedReads)
+        {
+            rawReads.unpersist();
+        }
+
         final Broadcast<RecalibrationReport> reportBroadcast = ctx.broadcast(bqsrReport);
-        final JavaRDD<GATKRead> calibratedReads = ApplyBQSRSparkFn.apply(markedReads, reportBroadcast, getHeaderForReads(), applyBqsrArgs.toApplyBQSRArgumentCollection(bqsrArgs.PRESERVE_QSCORES_LESS_THAN));
+        final JavaRDD<GATKRead> calibratedReads = ApplyBQSRSparkFn.apply(markedReads, reportBroadcast, getHeaderForReads(), applyBqsrArgs.toApplyBQSRArgumentCollection(bqsrArgs.PRESERVE_QSCORES_LESS_THAN)).setName("calibratedReads");
 
         final List<SimpleInterval> intervals = hasIntervals() ? getIntervals() : IntervalUtils.getAllIntervalsForReference(getHeaderForReads().getSequenceDictionary());
         final ReadFilter haplotypeCallerFilter = (new GATKReadFilterPluginDescriptor(HaplotypeCallerEngine.makeStandardHCReadFilters())).getMergedReadFilter(getHeaderForReads());
-        final JavaRDD<GATKRead> filteredReads = calibratedReads.filter(read -> haplotypeCallerFilter.test(read));
+        final JavaRDD<GATKRead> filteredReads = calibratedReads.filter(read -> haplotypeCallerFilter.test(read)).setName("filteredReads");
 
-        final JavaRDD<VariantContext> variants = callVariantsWithHaplotypeCaller(getAuthHolder(), ctx, filteredReads, getHeaderForReads(), getReference(), intervals, hcArgs, shardingArgs);
+        // hyplotype caller
+        final JavaRDD<VariantContext> variants = callVariantsWithHaplotypeCaller(getAuthHolder(), ctx, filteredReads, getHeaderForReads(), getReference(), intervals, hcArgs, shardingArgs).setName("variants");
         if (hcArgs.emitReferenceConfidence == ReferenceConfidenceMode.GVCF) {
             // VariantsSparkSink/Hadoop-BAM VCFOutputFormat do not support writing GVCF, see https://github.com/broadinstitute/gatk/issues/2738
             writeVariants(variants);
@@ -209,6 +406,31 @@ public class ReadsPipelineSpark extends GATKSparkTool {
                 throw new UserException.CouldNotCreateOutputFile(output, "writing failed", e);
             }
         }
+
+        if(!keepFastqSplit) {
+            try {
+                FileSystem split_fs = FileSystem.get(new URI(inputSplittedFastq1), new Configuration(true));
+                for(Tuple3<String, String, Long> e: fastqRecords.collect()) {
+                    split_fs.delete(new Path(new URI(e._1())), false);
+                    if(e._2()!=null) {
+                        split_fs.delete(new Path(new URI(e._2())), false);
+                    }
+                }
+            } catch (IOException e) {
+                throw new UserException("Cannot open file: "+e.getMessage());
+            } catch (URISyntaxException e) {
+                throw new UserException("URI syntax error: "+e.getMessage());
+            }
+        }
+    }
+
+    @Override
+    public int getRecommendedNumReducers() {
+      if (numReducers == 0) {
+          // although 0 is the default, it should have been changed during the initiation
+          throw new UserException("numReducers is 0");
+      }
+      return numReducers;
     }
 
 		/**

@@ -1,0 +1,4 @@
+[submodule "src/main/native/bwa-flow"]
+	path = src/main/native/bwa-flow
+	url = git@github.com:falcon-computing/bwa-flow.git
+	branch = gatk-bwa

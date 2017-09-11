@@ -1,0 +1,8 @@
+lib/
+src/*.h
+bin/
+obj/
+cxxopts
+htslib
+hadoop
+
